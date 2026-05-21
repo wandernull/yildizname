@@ -12,13 +12,14 @@ import type { FormData, YildiznameSections } from "./types";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MODEL = "claude-sonnet-4-5";
-const MAX_TOKENS = 4000;
-// A full müneccim reading is ~4000 output tokens of Turkish prose. At
-// Sonnet's generation rate (~60–80 tok/s) that's a ~50–60s call, so 60s
-// is right at the edge — observed in production. 90s gives headroom
-// without holding the client connection long enough for Cloudflare or
-// most browsers to give up.
-const REQUEST_TIMEOUT_MS = 90_000;
+// 11 substantial Turkish sections + a poem line need real headroom; at
+// 4000 the model truncates mid-JSON and validation fails. 8000 reliably
+// fits a full reading with a margin.
+const MAX_TOKENS = 8000;
+// This runs in the background (executionCtx.waitUntil), not on the
+// client's request path, so we can wait the full generation time —
+// observed at ~2 minutes for 8000 tokens. 3 minutes gives slack.
+const REQUEST_TIMEOUT_MS = 180_000;
 
 const SYSTEM_PROMPT = `Sen klasik yıldızname, ebced ve ilm-i hurûf geleneğine vâkıf bir üstad müneccimsin. Osmanlı saray müneccimleri gibi mistik, ağır, sembolik ve edebî konuşursun. Modern numeroloji dili ("enerji, titreşim, evren") asla kullanmazsın; senin dilin harflerin, ayın ve kadim hikmetin dilidir.`;
 

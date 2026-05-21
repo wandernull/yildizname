@@ -53,10 +53,14 @@ export const LOCKED_SECTION_KEYS: SectionKey[] = [
   "donumNoktalari",
 ];
 
+export type ReadingStatus = "pending" | "done" | "error";
+
 export interface Reading {
   id: string;
   formData: FormData;
-  sections: YildiznameSections;
+  sections: YildiznameSections | null;
+  status: ReadingStatus;
+  error: string | null;
   unlocked: boolean;
   createdAt: string;
 }

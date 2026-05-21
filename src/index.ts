@@ -1,5 +1,11 @@
 import { Hono } from "hono";
-import { getReading, insertReading, unlockReading } from "./lib/db";
+import {
+  completeReading,
+  failReading,
+  getReading,
+  insertPendingReading,
+  unlockReading,
+} from "./lib/db";
 import { generateYildizname } from "./lib/llm";
 import { defaultPaymentProvider } from "./lib/payment";
 import type { Env, FormData } from "./lib/types";
@@ -39,6 +45,31 @@ function isValidForm(body: unknown): body is FormData {
   );
 }
 
+// ----- background work ------------------------------------------------------
+
+// Runs after the response has been sent. Workers keeps the invocation alive
+// for as long as this promise is awaiting (up to the platform's 30-minute
+// cap). If the runtime sheds load, the row stays in 'pending' — the client
+// keeps polling and either gets the eventual completion, or the user retries
+// from /form.
+async function runGenerationJob(
+  env: Env,
+  id: string,
+  form: FormData,
+): Promise<void> {
+  try {
+    const sections = await generateYildizname(form, env.ANTHROPIC_API_KEY);
+    await completeReading(env.DB, id, sections);
+  } catch (err) {
+    const msg =
+      err instanceof Error
+        ? err.message
+        : "Yıldızlar şu an okunamıyor, sonra tekrar deneyin.";
+    console.error("[generate] background job failed", { id, error: msg });
+    await failReading(env.DB, id, msg);
+  }
+}
+
 // ----- API ------------------------------------------------------------------
 
 app.post("/api/generate", async (c) => {
@@ -52,28 +83,20 @@ app.post("/api/generate", async (c) => {
     return c.json({ error: "Lütfen zorunlu alanları doldurun." }, 400);
   }
   const form = body satisfies FormData;
+  const id = crypto.randomUUID();
   try {
-    const sections = await generateYildizname(form, c.env.ANTHROPIC_API_KEY);
-    const id = crypto.randomUUID();
-    await insertReading(c.env.DB, {
-      id,
-      formData: form,
-      sections,
-      unlocked: false,
-    });
-    return c.json({
-      id,
-      status: "done",
-      freeSection: sections.karakterinOzu,
-      kapakSozu: sections.kapakSozu,
-    });
+    await insertPendingReading(c.env.DB, id, form);
   } catch (err) {
-    const msg =
-      err instanceof Error
-        ? err.message
-        : "Yıldızlar şu an okunamıyor, sonra tekrar deneyin.";
-    return c.json({ error: msg, status: "error" }, 500);
+    console.error("[generate] insert pending failed", { id, error: err });
+    return c.json({ error: "Okuma kaydedilemedi." }, 500);
   }
+
+  // Fire and forget — Workers will hold the invocation open until the
+  // promise settles. The client polls /api/reading/:id to see when it
+  // flips out of 'pending'.
+  c.executionCtx.waitUntil(runGenerationJob(c.env, id, form));
+
+  return c.json({ id, status: "pending" });
 });
 
 app.get("/api/reading/:id", async (c) => {
@@ -82,26 +105,51 @@ app.get("/api/reading/:id", async (c) => {
   if (!reading) {
     return c.json({ error: "Okuma bulunamadı." }, 404);
   }
+
+  if (reading.status === "pending") {
+    return c.json({ id: reading.id, status: "pending" });
+  }
+  if (reading.status === "error") {
+    return c.json(
+      {
+        id: reading.id,
+        status: "error",
+        error: reading.error ?? "Bilinmeyen hata.",
+      },
+      // 200 so the client can read the JSON without fetch throwing on !ok.
+      200,
+    );
+  }
+
+  // status === 'done'
+  const sections = reading.sections;
+  if (!sections) {
+    return c.json(
+      { id: reading.id, status: "error", error: "Okuma boş döndü." },
+      200,
+    );
+  }
   const base = {
     id: reading.id,
+    status: "done" as const,
     unlocked: reading.unlocked,
-    kapakSozu: reading.sections.kapakSozu,
-    karakterinOzu: reading.sections.karakterinOzu,
+    kapakSozu: sections.kapakSozu,
+    karakterinOzu: sections.karakterinOzu,
   };
   if (!reading.unlocked) {
     return c.json(base);
   }
   return c.json({
     ...base,
-    gizliHuylar: reading.sections.gizliHuylar,
-    ruhsalYuk: reading.sections.ruhsalYuk,
-    askEvlilik: reading.sections.askEvlilik,
-    esinKarakteri: reading.sections.esinKarakteri,
-    cocukYuva: reading.sections.cocukYuva,
-    rizkKariyer: reading.sections.rizkKariyer,
-    nazarAgirlik: reading.sections.nazarAgirlik,
-    saglik: reading.sections.saglik,
-    donumNoktalari: reading.sections.donumNoktalari,
+    gizliHuylar: sections.gizliHuylar,
+    ruhsalYuk: sections.ruhsalYuk,
+    askEvlilik: sections.askEvlilik,
+    esinKarakteri: sections.esinKarakteri,
+    cocukYuva: sections.cocukYuva,
+    rizkKariyer: sections.rizkKariyer,
+    nazarAgirlik: sections.nazarAgirlik,
+    saglik: sections.saglik,
+    donumNoktalari: sections.donumNoktalari,
   });
 });
 
@@ -120,14 +168,19 @@ app.post("/api/unlock", async (c) => {
   if (!existing) {
     return c.json({ success: false, error: "Okuma bulunamadı." }, 404);
   }
+  if (existing.status !== "done") {
+    return c.json(
+      { success: false, error: "Okuma henüz hazır değil." },
+      409,
+    );
+  }
   if (existing.unlocked) {
-    // Idempotent — already unlocked.
     return c.json({ success: true, transactionId: "already_unlocked" });
   }
   const provider = defaultPaymentProvider();
   const result = await provider.charge({
     readingId: id,
-    amount: Number(c.env.READING_PRICE_TRY ?? "250") * 100, // kuruş
+    amount: Number(c.env.READING_PRICE_TRY ?? "250") * 100,
     currency: "TRY",
   });
   if (!result.success) {
@@ -144,10 +197,6 @@ app.post("/api/unlock", async (c) => {
 });
 
 // ----- SPA fallback ---------------------------------------------------------
-// Any non-API GET that wasn't already served by the Assets binding falls
-// through to here. We rewrite to /index.html so client-side routing for
-// /form, /loading, /result/:id all hydrate the same SPA shell.
-
 app.notFound(async (c) => {
   if (c.req.path.startsWith("/api/")) {
     return c.json({ error: "Not found" }, 404);
