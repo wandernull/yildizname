@@ -31,3 +31,13 @@ migrations_dir = "migrations"
 # via `.dev.vars` for local dev.
 [vars]
 READING_PRICE_TRY = "250"
+
+# Worker Custom Domains are attached out-of-band via the Cloudflare API
+# because the CI deploy token (CLOUDFLARE_API_TOKEN) is scoped narrowly for
+# Workers:Edit only — it does not have Zone:DNS:Edit / Zone:Workers Routes:Edit.
+# Adding a `routes` block here with `custom_domain = true` would cause
+# `wrangler deploy` in CI to fail. Currently attached:
+#   - yildizna.me      (apex; serves the app)
+#   - www.yildizna.me  (Worker 301s to apex)
+# If these ever need re-attaching, re-run the `PUT /accounts/{id}/workers/domains`
+# calls from src/index.ts's comment block.

@@ -6,6 +6,22 @@ import type { Env, FormData } from "./lib/types";
 
 const app = new Hono<{ Bindings: Env }>();
 
+// ----- canonical host: www → apex 301 ---------------------------------------
+// Both yildizna.me and www.yildizna.me are attached as Worker Custom Domains
+// in Cloudflare. Inside the Worker we redirect any www.* traffic to the
+// apex so there's one canonical hostname for SEO and shares.
+app.use(async (c, next) => {
+  const host = c.req.header("host");
+  if (host && host.toLowerCase().startsWith("www.")) {
+    const apex = host.slice(4);
+    const url = new URL(c.req.url);
+    url.host = apex;
+    url.protocol = "https:";
+    return c.redirect(url.toString(), 301);
+  }
+  return next();
+});
+
 // ----- input validation -----------------------------------------------------
 
 function isValidForm(body: unknown): body is FormData {
