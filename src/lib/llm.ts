@@ -1,5 +1,19 @@
-import Anthropic from "@anthropic-ai/sdk";
 import type { FormData, YildiznameSections } from "./types";
+
+// We call the Anthropic Messages API directly with Workers' native fetch
+// instead of going through @anthropic-ai/sdk. Two reasons:
+//   1) The SDK retries internally with exponential backoff on top of our
+//      own retry; on a slow LLM call this can stack to >120s and Cloudflare
+//      closes the client connection. Direct fetch gives us a single, bounded
+//      retry policy that's predictable to debug.
+//   2) Smaller bundle and one less Node-shim dependency to reason about
+//      inside the Workers runtime.
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
+const MODEL = "claude-sonnet-4-5";
+const MAX_TOKENS = 4000;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 const SYSTEM_PROMPT = `Sen klasik yıldızname, ebced ve ilm-i hurûf geleneğine vâkıf bir üstad müneccimsin. Osmanlı saray müneccimleri gibi mistik, ağır, sembolik ve edebî konuşursun. Modern numeroloji dili ("enerji, titreşim, evren") asla kullanmazsın; senin dilin harflerin, ayın ve kadim hikmetin dilidir.`;
 
@@ -30,6 +44,10 @@ const REQUIRED_KEYS: (keyof YildiznameSections)[] = [
   "donumNoktalari",
 ];
 
+interface AnthropicMessage {
+  content?: Array<{ type: string; text?: string }>;
+}
+
 function extractJson(text: string): unknown {
   const cleaned = text
     .replace(/^```(?:json)?\s*/i, "")
@@ -56,6 +74,50 @@ function validateSections(obj: unknown): YildiznameSections {
   return record as unknown as YildiznameSections;
 }
 
+async function callAnthropic(
+  apiKey: string,
+  userPrompt: string,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: MAX_TOKENS,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userPrompt }],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error("[llm] anthropic non-2xx", {
+        status: res.status,
+        body: body.slice(0, 500),
+      });
+      throw new Error(`Anthropic ${res.status}`);
+    }
+
+    const data = (await res.json()) as AnthropicMessage;
+    const textBlock = data.content?.find((b) => b.type === "text");
+    if (!textBlock || typeof textBlock.text !== "string" || !textBlock.text) {
+      console.error("[llm] no text block in response", { data });
+      throw new Error("Müneccim sustu.");
+    }
+    return textBlock.text;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function generateYildizname(
   form: FormData,
   apiKey: string,
@@ -64,27 +126,25 @@ export async function generateYildizname(
     throw new Error("Müneccim suskun: API anahtarı ayarlanmamış.");
   }
 
-  // The Anthropic SDK supports Workers' fetch runtime out of the box.
-  const client = new Anthropic({ apiKey });
   const userPrompt = buildUserPrompt(form);
 
+  // One attempt, plus one retry only on JSON-parse / validation failures
+  // (network errors with a real status code mean something Anthropic-side
+  // is unhappy — retrying immediately won't help).
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await client.messages.create({
-        model: "claude-sonnet-4-5",
-        max_tokens: 4000,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userPrompt }],
-      });
-      const textBlock = response.content.find((b) => b.type === "text");
-      if (!textBlock || textBlock.type !== "text") {
-        throw new Error("Müneccim sustu.");
-      }
-      return validateSections(extractJson(textBlock.text));
+      const text = await callAnthropic(apiKey, userPrompt);
+      return validateSections(extractJson(text));
     } catch (err) {
       lastError = err;
-      // retry once
+      const isNetwork =
+        err instanceof Error &&
+        (err.message.startsWith("Anthropic ") || err.name === "AbortError");
+      if (isNetwork) break; // don't retry transport errors
+      console.warn("[llm] parse/validation failed, retrying once", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
