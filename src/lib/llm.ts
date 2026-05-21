@@ -61,18 +61,36 @@ const REQUIRED_KEYS: (keyof YildiznameSections)[] = [
   "donumNoktalari",
 ];
 
-function extractJson(text: string): unknown {
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/i, "")
-    .trim();
-  const firstBrace = cleaned.indexOf("{");
-  const lastBrace = cleaned.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1) {
-    throw new Error("Cevapta JSON nesnesi yok.");
-  }
-  return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
-}
+// We use Anthropic's tool-use feature to get guaranteed-valid JSON back.
+// Asking the model to "output JSON as text" produced invalid escaping on
+// long Turkish prose (observed: unescaped quote/newline at ~1400 chars in).
+// With a tool, Anthropic constructs the JSON server-side and the streamed
+// `input_json_delta` chunks always concatenate to valid JSON.
+const SUBMIT_TOOL = {
+  name: "submit_reading",
+  description:
+    "Müneccimin nihai yıldızname okumasını gönderir. Tüm alanlar Türkçe, edebî, en az bir zengin paragraf olmalıdır.",
+  input_schema: {
+    type: "object",
+    properties: {
+      kapakSozu: {
+        type: "string",
+        description: "Kısa, etkileyici bir açılış mısrası.",
+      },
+      karakterinOzu: { type: "string" },
+      gizliHuylar: { type: "string" },
+      ruhsalYuk: { type: "string" },
+      askEvlilik: { type: "string" },
+      esinKarakteri: { type: "string" },
+      cocukYuva: { type: "string" },
+      rizkKariyer: { type: "string" },
+      nazarAgirlik: { type: "string" },
+      saglik: { type: "string" },
+      donumNoktalari: { type: "string" },
+    },
+    required: REQUIRED_KEYS,
+  },
+} as const;
 
 function validateSections(obj: unknown): YildiznameSections {
   if (!obj || typeof obj !== "object") {
@@ -87,10 +105,9 @@ function validateSections(obj: unknown): YildiznameSections {
   return record as unknown as YildiznameSections;
 }
 
-// Parse the Anthropic SSE stream and return the concatenated text from all
-// `content_block_delta` events whose delta is a `text_delta`. We deliberately
-// ignore other event types (ping, message_start, content_block_start/stop,
-// message_delta, message_stop) — we only care about the text.
+// Parse the Anthropic SSE stream. We're using tool_use so we only care about
+// content blocks of type "tool_use" — their `input_json_delta` events
+// concatenate into a valid JSON document for the tool's input schema.
 async function readAnthropicStream(res: Response): Promise<string> {
   if (!res.body) {
     throw new Error("Müneccim cevabı boş geldi.");
@@ -98,10 +115,10 @@ async function readAnthropicStream(res: Response): Promise<string> {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let text = "";
+  let toolInputJson = "";
+  let inToolUseBlock = false;
   let stopReason: string | null = null;
 
-  // Outer total-time cap to guard against a hung stream.
   const deadline = Date.now() + STREAM_TIMEOUT_MS;
 
   while (true) {
@@ -112,14 +129,11 @@ async function readAnthropicStream(res: Response): Promise<string> {
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // SSE events are separated by blank lines ("\n\n"). Each event may
-    // span multiple "data:" lines (in practice Anthropic sends one).
     let sepIdx;
     while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
       const rawEvent = buffer.slice(0, sepIdx);
       buffer = buffer.slice(sepIdx + 2);
 
-      // Pull the data payload(s) from the event block.
       const dataLines: string[] = [];
       for (const line of rawEvent.split("\n")) {
         if (line.startsWith("data:")) {
@@ -128,28 +142,36 @@ async function readAnthropicStream(res: Response): Promise<string> {
       }
       if (dataLines.length === 0) continue;
       const payload = dataLines.join("");
-      if (payload === "[DONE]") {
-        // Anthropic doesn't actually send [DONE]; this is OpenAI-style. Skip safely.
-        continue;
-      }
 
       let parsed: unknown;
       try {
         parsed = JSON.parse(payload);
       } catch {
-        // Malformed chunk — skip rather than blow up the whole stream.
         continue;
       }
       const ev = parsed as {
         type?: string;
-        delta?: { type?: string; text?: string; stop_reason?: string };
+        index?: number;
+        content_block?: { type?: string };
+        delta?: {
+          type?: string;
+          partial_json?: string;
+          stop_reason?: string;
+        };
       };
-      if (
-        ev.type === "content_block_delta" &&
-        ev.delta?.type === "text_delta" &&
-        typeof ev.delta.text === "string"
-      ) {
-        text += ev.delta.text;
+
+      if (ev.type === "content_block_start") {
+        inToolUseBlock = ev.content_block?.type === "tool_use";
+      } else if (ev.type === "content_block_delta") {
+        if (
+          inToolUseBlock &&
+          ev.delta?.type === "input_json_delta" &&
+          typeof ev.delta.partial_json === "string"
+        ) {
+          toolInputJson += ev.delta.partial_json;
+        }
+      } else if (ev.type === "content_block_stop") {
+        inToolUseBlock = false;
       } else if (
         ev.type === "message_delta" &&
         typeof ev.delta?.stop_reason === "string"
@@ -161,21 +183,19 @@ async function readAnthropicStream(res: Response): Promise<string> {
 
   if (stopReason === "max_tokens") {
     console.warn("[llm] response truncated at max_tokens", {
-      chars: text.length,
+      chars: toolInputJson.length,
     });
   }
-  if (!text) {
-    throw new Error("Müneccim sustu.");
+  if (!toolInputJson) {
+    throw new Error(`Müneccim sustu. stop_reason=${stopReason ?? "?"}`);
   }
-  return text;
+  return toolInputJson;
 }
 
 async function callAnthropicStream(
   apiKey: string,
   userPrompt: string,
 ): Promise<string> {
-  // Two timeouts: a fast one waiting for headers, and the broader stream
-  // deadline enforced inside readAnthropicStream.
   const controller = new AbortController();
   const headersTimer = setTimeout(
     () => controller.abort(),
@@ -198,6 +218,8 @@ async function callAnthropicStream(
         stream: true,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userPrompt }],
+        tools: [SUBMIT_TOOL],
+        tool_choice: { type: "tool", name: SUBMIT_TOOL.name },
       }),
       signal: controller.signal,
     });
@@ -227,14 +249,14 @@ export async function generateYildizname(
 
   const userPrompt = buildUserPrompt(form);
 
-  // One attempt, plus one retry only on JSON-parse / validation failures
-  // (an HTTP error or aborted stream means something Anthropic-side is
-  // unhappy — immediate retry won't help, and we'd burn another 2 minutes).
+  // One attempt, plus one retry only on parse/validation failures (an HTTP
+  // error or aborted stream means something Anthropic-side is unhappy —
+  // immediate retry won't help and burns another 2–3 minutes).
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const text = await callAnthropicStream(apiKey, userPrompt);
-      return validateSections(extractJson(text));
+      const json = await callAnthropicStream(apiKey, userPrompt);
+      return validateSections(JSON.parse(json));
     } catch (err) {
       lastError = err;
       const isTransport =
