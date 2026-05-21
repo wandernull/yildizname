@@ -1,25 +1,36 @@
 import type { FormData, YildiznameSections } from "./types";
 
-// We call the Anthropic Messages API directly with Workers' native fetch
-// instead of going through @anthropic-ai/sdk. Two reasons:
-//   1) The SDK retries internally with exponential backoff on top of our
-//      own retry; on a slow LLM call this can stack to >120s and Cloudflare
-//      closes the client connection. Direct fetch gives us a single, bounded
-//      retry policy that's predictable to debug.
-//   2) Smaller bundle and one less Node-shim dependency to reason about
-//      inside the Workers runtime.
+// We call the Anthropic Messages API directly with Workers' native fetch,
+// using server-sent-events streaming.
+//
+// Why streaming?
+//   1) Workers has a 100-second timeout on subrequests that don't return
+//      headers in time. A non-streaming call for ~8000 output tokens takes
+//      ~2–3 minutes, which trips that timeout. Streaming returns headers
+//      immediately, so the timeout never fires.
+//   2) Workers Free plan also cuts `executionCtx.waitUntil` short, so we
+//      can't do the work in the background — the only way to make this
+//      flow reliable on Free is to keep the client connected to the
+//      Worker while the Worker keeps the Anthropic stream open.
+//
+// We still assemble the full text on the server before returning JSON to
+// the client — the frontend gets a normal one-shot response, no SSE
+// parsing of its own.
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MODEL = "claude-sonnet-4-5";
 // 11 substantial Turkish sections + a poem line need real headroom; at
 // 4000 the model truncates mid-JSON and validation fails. 8000 reliably
-// fits a full reading with a margin.
+// fits a full reading with margin.
 const MAX_TOKENS = 8000;
-// This runs in the background (executionCtx.waitUntil), not on the
-// client's request path, so we can wait the full generation time —
-// observed at ~2 minutes for 8000 tokens. 3 minutes gives slack.
-const REQUEST_TIMEOUT_MS = 180_000;
+// Time-to-first-byte timeout. With streaming, Anthropic responds with
+// headers in <1s; anything past 30s here is a clear-cut connection issue.
+const HEADERS_TIMEOUT_MS = 30_000;
+// Total stream duration cap. A full 8000-token reading runs ~3 minutes;
+// 5 minutes is comfortable headroom while still failing fast if something
+// stalls.
+const STREAM_TIMEOUT_MS = 5 * 60_000;
 
 const SYSTEM_PROMPT = `Sen klasik yıldızname, ebced ve ilm-i hurûf geleneğine vâkıf bir üstad müneccimsin. Osmanlı saray müneccimleri gibi mistik, ağır, sembolik ve edebî konuşursun. Modern numeroloji dili ("enerji, titreşim, evren") asla kullanmazsın; senin dilin harflerin, ayın ve kadim hikmetin dilidir.`;
 
@@ -50,10 +61,6 @@ const REQUIRED_KEYS: (keyof YildiznameSections)[] = [
   "donumNoktalari",
 ];
 
-interface AnthropicMessage {
-  content?: Array<{ type: string; text?: string }>;
-}
-
 function extractJson(text: string): unknown {
   const cleaned = text
     .replace(/^```(?:json)?\s*/i, "")
@@ -80,48 +87,134 @@ function validateSections(obj: unknown): YildiznameSections {
   return record as unknown as YildiznameSections;
 }
 
-async function callAnthropic(
+// Parse the Anthropic SSE stream and return the concatenated text from all
+// `content_block_delta` events whose delta is a `text_delta`. We deliberately
+// ignore other event types (ping, message_start, content_block_start/stop,
+// message_delta, message_stop) — we only care about the text.
+async function readAnthropicStream(res: Response): Promise<string> {
+  if (!res.body) {
+    throw new Error("Müneccim cevabı boş geldi.");
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let stopReason: string | null = null;
+
+  // Outer total-time cap to guard against a hung stream.
+  const deadline = Date.now() + STREAM_TIMEOUT_MS;
+
+  while (true) {
+    if (Date.now() > deadline) {
+      throw new Error("Müneccim hâlâ konuşuyor — vakit doldu.");
+    }
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE events are separated by blank lines ("\n\n"). Each event may
+    // span multiple "data:" lines (in practice Anthropic sends one).
+    let sepIdx;
+    while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sepIdx);
+      buffer = buffer.slice(sepIdx + 2);
+
+      // Pull the data payload(s) from the event block.
+      const dataLines: string[] = [];
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trim());
+        }
+      }
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join("");
+      if (payload === "[DONE]") {
+        // Anthropic doesn't actually send [DONE]; this is OpenAI-style. Skip safely.
+        continue;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        // Malformed chunk — skip rather than blow up the whole stream.
+        continue;
+      }
+      const ev = parsed as {
+        type?: string;
+        delta?: { type?: string; text?: string; stop_reason?: string };
+      };
+      if (
+        ev.type === "content_block_delta" &&
+        ev.delta?.type === "text_delta" &&
+        typeof ev.delta.text === "string"
+      ) {
+        text += ev.delta.text;
+      } else if (
+        ev.type === "message_delta" &&
+        typeof ev.delta?.stop_reason === "string"
+      ) {
+        stopReason = ev.delta.stop_reason;
+      }
+    }
+  }
+
+  if (stopReason === "max_tokens") {
+    console.warn("[llm] response truncated at max_tokens", {
+      chars: text.length,
+    });
+  }
+  if (!text) {
+    throw new Error("Müneccim sustu.");
+  }
+  return text;
+}
+
+async function callAnthropicStream(
   apiKey: string,
   userPrompt: string,
 ): Promise<string> {
+  // Two timeouts: a fast one waiting for headers, and the broader stream
+  // deadline enforced inside readAnthropicStream.
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const headersTimer = setTimeout(
+    () => controller.abort(),
+    HEADERS_TIMEOUT_MS,
+  );
+
+  let res: Response;
   try {
-    const res = await fetch(ANTHROPIC_URL, {
+    res = await fetch(ANTHROPIC_URL, {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
+        accept: "text/event-stream",
       },
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_TOKENS,
+        stream: true,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userPrompt }],
       }),
       signal: controller.signal,
     });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.error("[llm] anthropic non-2xx", {
-        status: res.status,
-        body: body.slice(0, 500),
-      });
-      throw new Error(`Anthropic ${res.status}`);
-    }
-
-    const data = (await res.json()) as AnthropicMessage;
-    const textBlock = data.content?.find((b) => b.type === "text");
-    if (!textBlock || typeof textBlock.text !== "string" || !textBlock.text) {
-      console.error("[llm] no text block in response", { data });
-      throw new Error("Müneccim sustu.");
-    }
-    return textBlock.text;
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(headersTimer);
   }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[llm] anthropic non-2xx", {
+      status: res.status,
+      body: body.slice(0, 500),
+    });
+    throw new Error(`Anthropic ${res.status}`);
+  }
+
+  return readAnthropicStream(res);
 }
 
 export async function generateYildizname(
@@ -135,19 +228,21 @@ export async function generateYildizname(
   const userPrompt = buildUserPrompt(form);
 
   // One attempt, plus one retry only on JSON-parse / validation failures
-  // (network errors with a real status code mean something Anthropic-side
-  // is unhappy — retrying immediately won't help).
+  // (an HTTP error or aborted stream means something Anthropic-side is
+  // unhappy — immediate retry won't help, and we'd burn another 2 minutes).
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const text = await callAnthropic(apiKey, userPrompt);
+      const text = await callAnthropicStream(apiKey, userPrompt);
       return validateSections(extractJson(text));
     } catch (err) {
       lastError = err;
-      const isNetwork =
+      const isTransport =
         err instanceof Error &&
-        (err.message.startsWith("Anthropic ") || err.name === "AbortError");
-      if (isNetwork) break; // don't retry transport errors
+        (err.message.startsWith("Anthropic ") ||
+          err.name === "AbortError" ||
+          err.message.includes("vakit doldu"));
+      if (isTransport) break;
       console.warn("[llm] parse/validation failed, retrying once", {
         error: err instanceof Error ? err.message : String(err),
       });

@@ -1,11 +1,5 @@
 import { Hono } from "hono";
-import {
-  completeReading,
-  failReading,
-  getReading,
-  insertPendingReading,
-  unlockReading,
-} from "./lib/db";
+import { getReading, insertReading, unlockReading } from "./lib/db";
 import { generateYildizname } from "./lib/llm";
 import { defaultPaymentProvider } from "./lib/payment";
 import type { Env, FormData } from "./lib/types";
@@ -45,32 +39,15 @@ function isValidForm(body: unknown): body is FormData {
   );
 }
 
-// ----- background work ------------------------------------------------------
-
-// Runs after the response has been sent. Workers keeps the invocation alive
-// for as long as this promise is awaiting (up to the platform's 30-minute
-// cap). If the runtime sheds load, the row stays in 'pending' — the client
-// keeps polling and either gets the eventual completion, or the user retries
-// from /form.
-async function runGenerationJob(
-  env: Env,
-  id: string,
-  form: FormData,
-): Promise<void> {
-  try {
-    const sections = await generateYildizname(form, env.ANTHROPIC_API_KEY);
-    await completeReading(env.DB, id, sections);
-  } catch (err) {
-    const msg =
-      err instanceof Error
-        ? err.message
-        : "Yıldızlar şu an okunamıyor, sonra tekrar deneyin.";
-    console.error("[generate] background job failed", { id, error: msg });
-    await failReading(env.DB, id, msg);
-  }
-}
-
 // ----- API ------------------------------------------------------------------
+
+// /api/generate is synchronous on purpose. Workers Free can't reliably run a
+// 2–3 minute background task (waitUntil gets cancelled and there's a 100s
+// subrequest cap on non-streaming fetch). Instead we keep the client
+// connected for the duration: llm.ts uses Anthropic's SSE streaming API so
+// headers come back in <1s (subrequest timeout never fires) and the Worker
+// holds the inbound HTTP connection open while it consumes the stream and
+// writes the finished row to D1.
 
 app.post("/api/generate", async (c) => {
   let body: unknown;
@@ -85,18 +62,22 @@ app.post("/api/generate", async (c) => {
   const form = body satisfies FormData;
   const id = crypto.randomUUID();
   try {
-    await insertPendingReading(c.env.DB, id, form);
+    const sections = await generateYildizname(form, c.env.ANTHROPIC_API_KEY);
+    await insertReading(c.env.DB, { id, formData: form, sections, unlocked: false });
+    return c.json({
+      id,
+      status: "done",
+      freeSection: sections.karakterinOzu,
+      kapakSozu: sections.kapakSozu,
+    });
   } catch (err) {
-    console.error("[generate] insert pending failed", { id, error: err });
-    return c.json({ error: "Okuma kaydedilemedi." }, 500);
+    const msg =
+      err instanceof Error
+        ? err.message
+        : "Yıldızlar şu an okunamıyor, sonra tekrar deneyin.";
+    console.error("[generate] failed", { id, error: msg });
+    return c.json({ error: msg, status: "error" }, 500);
   }
-
-  // Fire and forget — Workers will hold the invocation open until the
-  // promise settles. The client polls /api/reading/:id to see when it
-  // flips out of 'pending'.
-  c.executionCtx.waitUntil(runGenerationJob(c.env, id, form));
-
-  return c.json({ id, status: "pending" });
 });
 
 app.get("/api/reading/:id", async (c) => {
@@ -105,33 +86,12 @@ app.get("/api/reading/:id", async (c) => {
   if (!reading) {
     return c.json({ error: "Okuma bulunamadı." }, 404);
   }
-
-  if (reading.status === "pending") {
-    return c.json({ id: reading.id, status: "pending" });
-  }
-  if (reading.status === "error") {
-    return c.json(
-      {
-        id: reading.id,
-        status: "error",
-        error: reading.error ?? "Bilinmeyen hata.",
-      },
-      // 200 so the client can read the JSON without fetch throwing on !ok.
-      200,
-    );
-  }
-
-  // status === 'done'
   const sections = reading.sections;
   if (!sections) {
-    return c.json(
-      { id: reading.id, status: "error", error: "Okuma boş döndü." },
-      200,
-    );
+    return c.json({ error: "Okuma boş döndü." }, 500);
   }
   const base = {
     id: reading.id,
-    status: "done" as const,
     unlocked: reading.unlocked,
     kapakSozu: sections.kapakSozu,
     karakterinOzu: sections.karakterinOzu,
@@ -167,12 +127,6 @@ app.post("/api/unlock", async (c) => {
   const existing = await getReading(c.env.DB, id);
   if (!existing) {
     return c.json({ success: false, error: "Okuma bulunamadı." }, 404);
-  }
-  if (existing.status !== "done") {
-    return c.json(
-      { success: false, error: "Okuma henüz hazır değil." },
-      409,
-    );
   }
   if (existing.unlocked) {
     return c.json({ success: true, transactionId: "already_unlocked" });

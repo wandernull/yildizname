@@ -35,44 +35,26 @@ function rowToReading(row: ReadingRow): Reading {
   };
 }
 
-// Insert a row in the pending state, with the form preserved but no sections
-// yet. The background LLM job will later fill them in via completeReading,
-// or mark the row failed via failReading.
-export async function insertPendingReading(
+// /api/generate is synchronous (see src/index.ts) so we just write the
+// finished row in one go. The status/error columns from migration 0002 are
+// retained for future use (e.g. a background-job consumer if we ever move
+// off Workers Free) but the synchronous path always writes status='done'
+// via the default — no need to set it explicitly.
+export async function insertReading(
   db: D1Database,
-  id: string,
-  form: FormData,
+  reading: { id: string; formData: FormData; sections: YildiznameSections; unlocked: boolean },
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO readings (id, form_data, sections, unlocked, status)
-       VALUES (?, ?, '{}', 0, 'pending')`,
+      `INSERT INTO readings (id, form_data, sections, unlocked)
+       VALUES (?, ?, ?, ?)`,
     )
-    .bind(id, JSON.stringify(form))
-    .run();
-}
-
-export async function completeReading(
-  db: D1Database,
-  id: string,
-  sections: YildiznameSections,
-): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE readings SET sections = ?, status = 'done', error = NULL WHERE id = ?`,
+    .bind(
+      reading.id,
+      JSON.stringify(reading.formData),
+      JSON.stringify(reading.sections),
+      reading.unlocked ? 1 : 0,
     )
-    .bind(JSON.stringify(sections), id)
-    .run();
-}
-
-export async function failReading(
-  db: D1Database,
-  id: string,
-  message: string,
-): Promise<void> {
-  await db
-    .prepare(`UPDATE readings SET status = 'error', error = ? WHERE id = ?`)
-    .bind(message.slice(0, 500), id)
     .run();
 }
 

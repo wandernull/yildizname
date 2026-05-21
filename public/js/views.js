@@ -271,14 +271,11 @@ export function renderForm(router) {
 // Loading
 // ----------------------------------------------------------------------------
 
-// Polling-based loading screen. POST /api/generate returns immediately with
-// an id and status='pending'; the LLM call runs in the Worker's background
-// task. We poll /api/reading/:id every ~2s and only navigate when the row
-// flips to 'done' (or surface a retry on 'error'). A full reading takes
-// ~2 minutes — the cycling messages and slow constellation animation keep
-// the surface alive while we wait.
-const POLL_INTERVAL_MS = 2000;
-const POLL_MAX_DURATION_MS = 5 * 60 * 1000; // give up after 5 minutes
+// Synchronous loading screen: POST /api/generate keeps the connection open
+// for the ~2–3 minute LLM call (the Worker streams Anthropic's SSE response
+// internally so neither the subrequest nor waitUntil limits trip). The
+// cycling messages and the constellation animation keep the surface alive
+// while we wait.
 const MIN_LOADING_MS = 2500;
 
 export function renderLoading(router) {
@@ -287,7 +284,7 @@ export function renderLoading(router) {
 
   let idx = 0;
   let cancelled = false;
-  let pollTimer = 0;
+  let navTimer = 0;
 
   const cycle = window.setInterval(() => {
     idx = (idx + 1) % LOADING_MESSAGES.length;
@@ -302,7 +299,7 @@ export function renderLoading(router) {
   const cleanup = () => {
     cancelled = true;
     window.clearInterval(cycle);
-    if (pollTimer) window.clearTimeout(pollTimer);
+    if (navTimer) window.clearTimeout(navTimer);
   };
   root.addEventListener("view:cleanup", cleanup);
 
@@ -322,54 +319,6 @@ export function renderLoading(router) {
     root.appendChild(btn);
   };
 
-  const pollUntilDone = async (id, startedAt) => {
-    if (cancelled) return;
-    try {
-      const data = await api.fetchReading(id);
-      if (cancelled) return;
-      if (data.status === "done") {
-        // Hold the mystical surface for at least MIN_LOADING_MS so the
-        // transition doesn't feel jarring if the call finishes fast (cached).
-        const elapsed = Date.now() - startedAt;
-        const wait = Math.max(0, MIN_LOADING_MS - elapsed);
-        pollTimer = window.setTimeout(() => {
-          if (cancelled) return;
-          try {
-            window.sessionStorage.removeItem(FORM_SESSION_KEY);
-          } catch {
-            /* ignore */
-          }
-          router.navigate(`/result/${encodeURIComponent(id)}`, { replace: true });
-        }, wait);
-        return;
-      }
-      if (data.status === "error") {
-        showError(data.error);
-        return;
-      }
-      // status === 'pending'
-      if (Date.now() - startedAt > POLL_MAX_DURATION_MS) {
-        showError("Yıldızlar şu an çok yavaş okunuyor. Sonra dener misin?");
-        return;
-      }
-      pollTimer = window.setTimeout(
-        () => pollUntilDone(id, startedAt),
-        POLL_INTERVAL_MS,
-      );
-    } catch (err) {
-      // /api/reading/:id can briefly 404 if the insert hasn't committed yet —
-      // tolerate a few transient errors before giving up.
-      if (Date.now() - startedAt > POLL_MAX_DURATION_MS) {
-        showError(err.message || "Yıldızlar şu an okunamıyor.");
-        return;
-      }
-      pollTimer = window.setTimeout(
-        () => pollUntilDone(id, startedAt),
-        POLL_INTERVAL_MS,
-      );
-    }
-  };
-
   const submit = async () => {
     let form = null;
     try {
@@ -387,7 +336,19 @@ export function renderLoading(router) {
       const data = await api.generateReading(form);
       if (cancelled) return;
       if (!data.id) throw new Error(data.error || "Müneccim sustu.");
-      pollUntilDone(data.id, startedAt);
+      const elapsed = Date.now() - startedAt;
+      const wait = Math.max(0, MIN_LOADING_MS - elapsed);
+      navTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        try {
+          window.sessionStorage.removeItem(FORM_SESSION_KEY);
+        } catch {
+          /* ignore */
+        }
+        router.navigate(`/result/${encodeURIComponent(data.id)}`, {
+          replace: true,
+        });
+      }, wait);
     } catch (err) {
       showError(err.message);
     }
