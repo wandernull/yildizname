@@ -13,7 +13,12 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MODEL = "claude-sonnet-4-5";
 const MAX_TOKENS = 4000;
-const REQUEST_TIMEOUT_MS = 60_000;
+// A full müneccim reading is ~4000 output tokens of Turkish prose. At
+// Sonnet's generation rate (~60–80 tok/s) that's a ~50–60s call, so 60s
+// is right at the edge — observed in production. 90s gives headroom
+// without holding the client connection long enough for Cloudflare or
+// most browsers to give up.
+const REQUEST_TIMEOUT_MS = 90_000;
 
 const SYSTEM_PROMPT = `Sen klasik yıldızname, ebced ve ilm-i hurûf geleneğine vâkıf bir üstad müneccimsin. Osmanlı saray müneccimleri gibi mistik, ağır, sembolik ve edebî konuşursun. Modern numeroloji dili ("enerji, titreşim, evren") asla kullanmazsın; senin dilin harflerin, ayın ve kadim hikmetin dilidir.`;
 
