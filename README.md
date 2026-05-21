@@ -1,5 +1,7 @@
 # Yıldızname
 
+**Live:** https://yildizna.me
+
 Klasik yıldızname ve ilm-i hurûf geleneğinden ilham alan, kişiye özel bir mistik okuma sunan Türkçe web uygulaması. Ücretsiz `Karakterin Özü` önizlemesi + 250 ₺'lik tam okuma kilidi.
 
 ## Stack

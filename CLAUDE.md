@@ -13,6 +13,8 @@ Turkish-speaking adults (~25–55) curious about mysticism, family-name and birt
 ## Architecture
 Single-component web project. The project folder *is* the app folder (no `-api` / `-app` split). One Cloudflare Worker serves both the JSON API (`/api/*`) and the vanilla HTML/CSS/JS frontend (`/`, `/form`, `/loading`, `/result/:id`) through the Workers Assets binding. The frontend is a single SPA shell driven by the History API — no frontend framework, no build step.
 
+Production lives on the apex **https://yildizna.me**. `www.yildizna.me` is also attached as a Worker Custom Domain, but Hono middleware in `src/index.ts` 301s any `www.*` request to the apex with path + query preserved, so the canonical hostname is the bare apex. The `*.workers.dev` URL still resolves as well.
+
 ## Tech stack
 Strictly the global "Web stack defaults" from `~/.claude/CLAUDE.md`:
 

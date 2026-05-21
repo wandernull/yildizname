@@ -24,13 +24,17 @@ A premium, mystical, Turkish-language astrology reading experience that feels no
 - Decision deferred until v1 traffic justifies the cost.
 
 ## Current status
-**As of 2026-05-21** — Phase 1 freshly scaffolded by Claude Code, *rebuilt* from scratch onto Cloudflare Workers + Hono + D1 per the global standards (a first attempt on Next.js was discarded). Live at **https://yildizname.gizemderinkok.workers.dev** — landing, SPA routes (`/form`, `/result/:id`), static assets, and the D1-backed `/api/reading/:id` 404 path all verified end-to-end. The actual LLM call has not been exercised — the production secret `ANTHROPIC_API_KEY` is **not set yet** (run `npx wrangler secret put ANTHROPIC_API_KEY` to fill it in). For local dev, set the same key in `.dev.vars` and run `npm run dev`.
+**As of 2026-05-21** — Phase 1 freshly scaffolded by Claude Code, *rebuilt* from scratch onto Cloudflare Workers + Hono + D1 per the global standards (a first attempt on Next.js was discarded).
 
-D1 database `yildizname-db` (`3c3b716c-0d08-4a67-ad7a-ce45f5668be1`) is provisioned, schema applied to both local and remote. GitHub repo `wandernull/yildizname` is public; CI runs typecheck + `wrangler deploy` on push to main; `CLOUDFLARE_API_TOKEN` is set as a repo secret.
+Live at the canonical domain: **https://yildizna.me** (apex). `www.yildizna.me` 301s to apex via Hono middleware in the Worker. The original `https://yildizname.gizemderinkok.workers.dev` still works too. Landing, SPA routes (`/form`, `/result/:id`), static assets, and the D1-backed `/api/reading/:id` 404 path all verified end-to-end on the apex. The production `ANTHROPIC_API_KEY` secret is set so `POST /api/generate` will actually call Claude.
+
+D1 database `yildizname-db` (`3c3b716c-0d08-4a67-ad7a-ce45f5668be1`) is provisioned, schema applied to both local and remote. GitHub repo `wandernull/yildizname` is public; CI runs typecheck + `wrangler deploy` on push to main; `CLOUDFLARE_API_TOKEN` is set as a repo secret. The CF zone for `yildizna.me` (`3b339b105307034214223c3e88aa2c3b`) is delegated to `henry.ns.cloudflare.com` + `ursula.ns.cloudflare.com`. Worker Custom Domains for apex and www were attached out-of-band via the CF API because the CI token is scoped narrowly (Workers only, no zone perms).
 
 ## Decisions log
 A reverse-chronological log of meaningful decisions. Each entry: date, decision, reasoning, alternatives considered.
 
+- **2026-05-21 — Canonical hostname is the bare apex `yildizna.me`; www 301s to apex.** Reasoning: simpler shareable links, one canonical for SEO. Implemented as a Hono middleware that checks the `Host:` header and 301s any `www.*` request to the apex with path + query preserved — no zone-level Redirect Rule needed, so the narrow CI token still works. Alternatives: CF Single Redirect Rule (rejected — needs Zone:Edit perms that the CI token lacks; would have forced a token expansion the user didn't want).
+- **2026-05-21 — Worker Custom Domains attached out-of-band via the CF API, not via wrangler.toml `routes`.** Reasoning: the CI's `CLOUDFLARE_API_TOKEN` is scoped to Workers:Edit only. A `routes = [..., custom_domain = true]` block in wrangler.toml would force CI to attempt zone-level reconciliation on every deploy and fail. By creating the bindings via direct `PUT /accounts/{id}/workers/domains` once, the custom domains persist in the CF account and CI deploys just push code without touching them. The decision is documented in `wrangler.toml` itself so future agents don't add a routes block by reflex. Alternatives: expand the CI token (rejected — user opted to keep it narrow).
 - **2026-05-21 — Wrangler pinned to v4 (not v3) from day one.** Reasoning: wrangler 3's bundled miniflare pins `zod@3.22.3`, which violates `@anthropic-ai/sdk`'s peer dep `^3.25.0 || ^4.0.0` and breaks `npm ci` on CI. v4 ships with a newer miniflare and resolves cleanly. Alternatives: add a `zod` override in package.json (rejected — masks the root cause), pin `@anthropic-ai/sdk` to an older version (rejected — loses SDK features).
 - **2026-05-21 — Workers Assets configured with `html_handling = "none"` + `not_found_handling = "none"`.** Reasoning: the default `auto-trailing-slash` HTML handling 307-redirects non-extension paths like `/form` to `/`, so the Worker's SPA fallback never runs. Explicitly disabling that lets the Worker handle non-asset, non-API paths and serve `/index.html` from the ASSETS binding. Alternatives: `not_found_handling = "single-page-application"` (rejected — also serves index.html for /api/* misses).
 - **2026-05-21 — Switched the entire stack from Next.js to Cloudflare Workers + Hono + D1.** Reasoning: the global standards in `~/.claude/CLAUDE.md` specify Workers + Hono as the web default; the first scaffold violated that and the user asked to rebuild strictly to standard. Alternatives considered: keep Next.js (rejected — violates standards), Workers + Hono + Pages for the frontend (rejected — extra deploy surface; Workers Assets serves static fine).
@@ -45,7 +49,19 @@ A reverse-chronological log of meaningful decisions. Each entry: date, decision,
 ## Notes for future sessions
 
 - **Git push auth quirk.** `gh repo create --push` worked first time, but subsequent `git push origin main` was rejected because the macOS Keychain credential helper offered the wrong (`baranbartu`) token. Workaround: `git push "https://x-access-token:${GH_TOKEN}@github.com/wandernull/yildizname.git" main`. This is a one-off URL — not a config change. If this recurs, prefer that form over `gh auth setup-git` (which would modify global git config, against the standards).
-- **Production secret not yet set.** The Worker has no `ANTHROPIC_API_KEY` in production. Until set, `POST /api/generate` will return 500 with `"Müneccim suskun…"`. Run `npx wrangler secret put ANTHROPIC_API_KEY` from the project root.
+- **Production secret is set.** `ANTHROPIC_API_KEY` was uploaded via `wrangler secret put` and confirmed by `wrangler secret list`. CF stores it as `secret_text` — name visible, value never readable back.
+- **Re-attaching Worker Custom Domains if they're ever cleared.** Account `ef35eded2f130806ec2824e2920866ee`, zone `3b339b105307034214223c3e88aa2c3b`. Run:
+  ```bash
+  source ~/.gizem-creds
+  for HOST in yildizna.me www.yildizna.me; do
+    curl -sS -X PUT "https://api.cloudflare.com/client/v4/accounts/ef35eded2f130806ec2824e2920866ee/workers/domains" \
+      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data "{\"environment\":\"production\",\"hostname\":\"$HOST\",\"service\":\"yildizname\",\"zone_id\":\"3b339b105307034214223c3e88aa2c3b\"}"
+    echo
+  done
+  ```
+  CF requires that no `A`/`AAAA`/`CNAME` record already exists at the hostname for this to succeed — clear those in the DNS dashboard first if it errors with code 100117.
 
 ## Open questions
 - **Stripe account.** Needs a registered TR entity (or international Stripe + TRY currency support). Blocking Phase 2.
