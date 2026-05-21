@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <title>Yıldızname — Yıldızların altında, harflerin diliyle</title>
+    <meta
+      name="description"
+      content="Klasik yıldızname ve ilm-i hurûf geleneğinden, sana özel bir kader okuması."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Noto+Serif:wght@400;600&display=swap"
+    />
+    <link rel="stylesheet" href="/styles/main.css" />
+  </head>
+  <body>
+    <canvas id="starfield" aria-hidden="true"></canvas>
+    <div id="moon" aria-hidden="true">
+      <svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fff5d6" stop-opacity="0.4" />
+            <stop offset="60%" stop-color="#c9a84c" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="#c9a84c" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="moonBody" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#fff5d6" />
+            <stop offset="100%" stop-color="#c9a84c" />
+          </linearGradient>
+        </defs>
+        <circle cx="60" cy="60" r="55" fill="url(#moonGlow)" />
+        <path d="M 70 18 A 42 42 0 1 0 70 102 A 32 32 0 1 1 70 18 Z" fill="url(#moonBody)" opacity="0.92" />
+      </svg>
+    </div>
+    <div id="shooting-star-host" aria-hidden="true"></div>
+
+    <main id="app">
+      <!-- views are populated by /js/views.js -->
+    </main>
+
+    <template id="tpl-landing">
+      <section class="view view-landing" data-view="landing">
+        <p class="brand">yıldızna.me</p>
+        <h1 class="shimmer-gold title">Yıldızname</h1>
+        <p class="subtitle">Yıldızların altında, harflerin diliyle</p>
+        <hr class="gold-rule" />
+        <a href="/form" data-link class="btn-gold-outline">Yıldıznameni Oku →</a>
+        <p class="footnote">Ücretsiz önizleme · Tam okuma 250 ₺</p>
+      </section>
+    </template>
+
+    <template id="tpl-form">
+      <section class="view view-form" data-view="form">
+        <div class="progress" aria-hidden="true">
+          <div class="progress-bar"></div>
+        </div>
+        <div class="step-host" aria-live="polite"></div>
+        <div class="step-nav">
+          <button type="button" class="link-btn nav-back" disabled>← Geri</button>
+          <button type="button" class="link-btn nav-skip" hidden>Atla</button>
+          <button type="button" class="btn-gold-outline nav-next" disabled>İlerle →</button>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-loading">
+      <section class="view view-loading" data-view="loading">
+        <svg class="constellation" viewBox="0 0 220 120" aria-hidden="true">
+          <path
+            class="constellation-line"
+            d="M 20 90 L 60 50 L 110 70 L 160 30 L 200 80"
+            fill="none"
+          />
+          <circle class="cn-star" cx="20" cy="90" r="2" style="--i: 0" />
+          <circle class="cn-star" cx="60" cy="50" r="2" style="--i: 1" />
+          <circle class="cn-star" cx="110" cy="70" r="2" style="--i: 2" />
+          <circle class="cn-star" cx="160" cy="30" r="2" style="--i: 3" />
+          <circle class="cn-star" cx="200" cy="80" r="2" style="--i: 4" />
+        </svg>
+        <p class="shimmer-gold loading-msg">Müneccim harflerini okuyor…</p>
+      </section>
+    </template>
+
+    <template id="tpl-result">
+      <article class="view view-result" data-view="result">
+        <header class="result-header">
+          <p class="kapak-sozu"></p>
+          <hr class="gold-rule" />
+        </header>
+        <div class="sections-host"></div>
+        <div class="post-actions" hidden>
+          <button type="button" class="btn-gold-outline action-listen-all">Baştan Sona Dinle</button>
+          <button type="button" class="btn-gold-outline action-print">PDF İndir</button>
+        </div>
+      </article>
+    </template>
+
+    <template id="tpl-error">
+      <section class="view view-error" data-view="error">
+        <p class="err-msg"></p>
+        <a href="/" data-link class="btn-gold-outline">Başa dön</a>
+      </section>
+    </template>
+
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>

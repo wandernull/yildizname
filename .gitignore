@@ -1,0 +1,17 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+
+# build / typegen artifacts
+dist/
+worker-configuration.d.ts
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Claude
+.claude/

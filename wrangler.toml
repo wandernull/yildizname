@@ -1,0 +1,33 @@
+name = "yildizname"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static frontend (vanilla HTML/CSS/JS) lives in ./public and is served by
+# Workers Assets. Asset requests are matched first; anything not found here
+# falls through to the Worker (which serves index.html for SPA routes and
+# handles /api/*).
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# When an asset isn't found, fall through to the Worker (which serves
+# index.html for SPA routes and 404s for /api/*).
+not_found_handling = "none"
+# Disable auto trailing-slash redirects so /form and /result/:id are not
+# 307-redirected to / before our Worker can handle them.
+html_handling = "none"
+
+# Relational data — readings table, schema in ./migrations.
+# Run `wrangler d1 create yildizname-db` and paste the returned database_id
+# below before the first deploy.
+[[d1_databases]]
+binding = "DB"
+database_name = "yildizname-db"
+database_id = "3c3b716c-0d08-4a67-ad7a-ce45f5668be1"
+migrations_dir = "migrations"
+
+# Non-secret runtime config goes here. Secrets (ANTHROPIC_API_KEY, later
+# STRIPE_SECRET_KEY) are set via `wrangler secret put` for production, and
+# via `.dev.vars` for local dev.
+[vars]
+READING_PRICE_TRY = "250"

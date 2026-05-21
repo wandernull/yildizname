@@ -1,0 +1,8 @@
+# Copy to .dev.vars (gitignored) for local `wrangler dev`.
+# For production, use `wrangler secret put ANTHROPIC_API_KEY`.
+
+ANTHROPIC_API_KEY="sk-ant-..."
+
+# Future:
+# STRIPE_SECRET_KEY="sk_test_..."
+# STRIPE_WEBHOOK_SECRET="whsec_..."
