@@ -81,6 +81,12 @@ A reverse-chronological log of meaningful decisions. Each entry: date, decision,
   ```
   CF requires that no `A`/`AAAA`/`CNAME` record already exists at the hostname for this to succeed — clear those in the DNS dashboard first if it errors with code 100117.
 
+## Backlog (deferred improvements)
+
+Small, well-specified items intentionally pushed out of the current scope. Each entry has enough context for a future session to act on cold.
+
+- **Sentence highlighting during audio playback.** Browser Web Speech v0 had it via `onboundary`; native `<audio>` doesn't get character timing for free, and we removed it when switching to ElevenLabs. *Implementation path (the "Option B" version, which is the right one):* switch the synth call in `src/lib/tts.ts` from `/v1/text-to-speech/{voice}/stream` to `/v1/text-to-speech/{voice}/stream/with-timestamps`. The new endpoint returns SSE JSON events where each chunk has `audio_base64` plus an `alignment` object with `characters[]`, `character_start_times_seconds[]`, `character_end_times_seconds[]`. Parse the SSE, accumulate the audio bytes (same write-to-R2 path as today) AND accumulate the alignment into a single JSON document; write the alignment to R2 at `tts/{readingId}/{section}.alignment.json` (~40 KB per section). Add a new `GET /api/tts/:readingId/:section/alignment` route returning the JSON. Frontend in `public/js/views.js`: fetch alignment alongside the `<audio>` `src`, listen on `audio.timeupdate` (~4 Hz), binary-search the cumulative char-time table for the current position, toggle `.active` on the matching `<span class="sentence">` inside the section body. Bring back the sentence-span markup in `paragraphHtml()` (was simplified when we removed Web Speech). Effort: ~1 hour. Cost: zero extra — `with-timestamps` is billed the same as `/stream`. No A/B; ship straight as the replacement. Reject Option A (linear `currentTime/duration` interpolation) because Eleven's prosody varies enough — long `…`/`—` pauses, slower sentence endings — that the highlight would drift ±1-3 sentences and feel buggier than no highlight at all.
+
 ## Open questions
 - **Stripe account.** Needs a registered TR entity (or international Stripe + TRY currency support). Blocking Phase 2.
 - **Domain.** Spec implies `yıldızna.me` — Punycode `xn--yldzna-tcb.me`. Confirm availability and Cloudflare DNS handles the IDN.
