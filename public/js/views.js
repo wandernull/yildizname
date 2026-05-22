@@ -845,6 +845,61 @@ function makeSection({
   return { node: section, dispose: player.dispose };
 }
 
+// Lock glyph used inside disabled action buttons. Inline SVG so it inherits
+// the button's currentColor.
+const LOCK_GLYPH_HTML = `<span class="lock-glyph" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6 V4 a3 3 0 0 1 6 0 v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="2" y="6" width="8" height="7" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="9.5" r="0.7" fill="currentColor"/></svg></span>`;
+
+// Apply the locked visual state (disabled, lock glyph, tooltip, visible
+// "Tam okumayla açılır" note) to a `.post-actions` element. Idempotent:
+// safe to call once on a freshly-built node and again on the template's
+// own copy.
+function applyLockedActionsState(postActionsEl) {
+  const buttons = postActionsEl.querySelectorAll(
+    ".action-listen-all, .action-print",
+  );
+  for (const btn of buttons) {
+    btn.disabled = true;
+    btn.classList.add("is-locked");
+    if (!btn.querySelector(".lock-glyph")) {
+      btn.insertAdjacentHTML("afterbegin", LOCK_GLYPH_HTML);
+    }
+    btn.title = "Tam okumayla açılır";
+  }
+  const note = postActionsEl.querySelector(".post-actions-lock-note");
+  if (note) note.hidden = false;
+}
+
+// Build a fresh post-actions DOM node in the locked state. Same structure
+// and styling as the template's bottom post-actions, just constructed
+// programmatically so we can insert one near the top payment block too.
+function makeLockedActionsBlock() {
+  const wrap = document.createElement("div");
+  wrap.className = "post-actions";
+
+  const row = document.createElement("div");
+  row.className = "post-actions-row";
+
+  const listen = document.createElement("button");
+  listen.type = "button";
+  listen.className = "btn-gold-outline action-listen-all";
+  listen.textContent = "Baştan Sona Dinle";
+
+  const printer = document.createElement("button");
+  printer.type = "button";
+  printer.className = "btn-gold-outline action-print";
+  printer.textContent = "PDF İndir";
+
+  row.append(listen, printer);
+
+  const note = document.createElement("p");
+  note.className = "post-actions-lock-note";
+  note.textContent = "Tam okumayla açılır";
+
+  wrap.append(row, note);
+  applyLockedActionsState(wrap);
+  return wrap;
+}
+
 function makePaymentBlock(id, router) {
   const wrap = document.createElement("div");
   wrap.className = "payment-block";
@@ -852,13 +907,10 @@ function makePaymentBlock(id, router) {
   btn.type = "button";
   btn.className = "btn-gold-fill";
   btn.textContent = "Kaderinin tamamını aç — 250 ₺";
-  const note = document.createElement("p");
-  note.className = "payment-note";
-  note.textContent = "Güvenli ödeme";
   const err = document.createElement("p");
   err.className = "payment-error";
   err.hidden = true;
-  wrap.append(btn, note, err);
+  wrap.append(btn, err);
 
   btn.addEventListener("click", async () => {
     btn.disabled = true;
@@ -954,9 +1006,13 @@ export function renderResult(router, { id, unlockedQuery }) {
       // Top payment block — same component used at the bottom. Sits right
       // before the locked sections so the user sees the unlock CTA the
       // moment they finish reading karakterinOzu, without scrolling past
-      // 9 blurred placeholders to find it.
+      // 9 blurred placeholders to find it. Followed by an identical
+      // locked-actions block (disabled "Baştan Sona Dinle" + "PDF İndir"
+      // with "Tam okumayla açılır" hint) so the top placement mirrors the
+      // bottom exactly.
       if (!isUnlocked) {
         sectionsHost.appendChild(makePaymentBlock(id, router));
+        sectionsHost.appendChild(makeLockedActionsBlock());
       }
 
       for (const key of LOCKED_SECTION_KEYS) {
@@ -987,26 +1043,15 @@ export function renderResult(router, { id, unlockedQuery }) {
       // The post-action buttons are visible at the bottom of the result
       // page even before unlock — disabled, with a lock glyph inside each
       // and a small "Tam okumayla açılır" hint below. After unlock they
-      // light up and become functional. Showing the locked state acts as
-      // an upsell hint without requiring scrolling-discovery.
+      // light up and become functional. The same locked-state block
+      // (built fresh by makeLockedActionsBlock above) is also inserted at
+      // the top of the locked area so both placements mirror exactly.
       const listenBtn = postActions.querySelector(".action-listen-all");
       const printBtn = postActions.querySelector(".action-print");
       const lockNote = postActions.querySelector(".post-actions-lock-note");
 
       if (!isUnlocked) {
-        for (const btn of [listenBtn, printBtn]) {
-          btn.disabled = true;
-          btn.classList.add("is-locked");
-          // Prepend a lock SVG inside the label so the disabled state has
-          // a clear "why" — works without hover on touch devices.
-          btn.insertAdjacentHTML(
-            "afterbegin",
-            `<span class="lock-glyph" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6 V4 a3 3 0 0 1 6 0 v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="2" y="6" width="8" height="7" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="9.5" r="0.7" fill="currentColor"/></svg></span>`,
-          );
-          // Desktop hover tooltip — invisible on mobile, harmless to include.
-          btn.title = "Tam okumayla açılır";
-        }
-        lockNote.hidden = false;
+        applyLockedActionsState(postActions);
       } else {
         lockNote.hidden = true;
 
