@@ -574,7 +574,9 @@ function makeSection({
     autoplay,
     manuallyStopped,
   });
-  section.appendChild(player.wrap);
+  // Insert the audio player between the title and the body so the user can
+  // tap Dinle before reading, and the read+listen experience starts in sync.
+  section.insertBefore(player.wrap, body);
   return { node: section, dispose: player.dispose };
 }
 
@@ -683,6 +685,14 @@ export function renderResult(router, { id, unlockedQuery }) {
       orn.textContent = "❧";
       orn.setAttribute("aria-hidden", "true");
       sectionsHost.appendChild(orn);
+
+      // Top payment block — same component used at the bottom. Sits right
+      // before the locked sections so the user sees the unlock CTA the
+      // moment they finish reading karakterinOzu, without scrolling past
+      // 9 blurred placeholders to find it.
+      if (!isUnlocked) {
+        sectionsHost.appendChild(makePaymentBlock(id, router));
+      }
 
       for (const key of LOCKED_SECTION_KEYS) {
         const text = data[key];
