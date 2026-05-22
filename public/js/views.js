@@ -854,7 +854,7 @@ function makePaymentBlock(id, router) {
   btn.textContent = "Kaderinin tamamını aç — 250 ₺";
   const note = document.createElement("p");
   note.className = "payment-note";
-  note.textContent = "Güvenli ödeme · Stripe";
+  note.textContent = "Güvenli ödeme";
   const err = document.createElement("p");
   err.className = "payment-error";
   err.hidden = true;
@@ -982,10 +982,33 @@ export function renderResult(router, { id, unlockedQuery }) {
 
       if (!isUnlocked) {
         sectionsHost.appendChild(makePaymentBlock(id, router));
+      }
+
+      // The post-action buttons are visible at the bottom of the result
+      // page even before unlock — disabled, with a lock glyph inside each
+      // and a small "Tam okumayla açılır" hint below. After unlock they
+      // light up and become functional. Showing the locked state acts as
+      // an upsell hint without requiring scrolling-discovery.
+      const listenBtn = postActions.querySelector(".action-listen-all");
+      const printBtn = postActions.querySelector(".action-print");
+      const lockNote = postActions.querySelector(".post-actions-lock-note");
+
+      if (!isUnlocked) {
+        for (const btn of [listenBtn, printBtn]) {
+          btn.disabled = true;
+          btn.classList.add("is-locked");
+          // Prepend a lock SVG inside the label so the disabled state has
+          // a clear "why" — works without hover on touch devices.
+          btn.insertAdjacentHTML(
+            "afterbegin",
+            `<span class="lock-glyph" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6 V4 a3 3 0 0 1 6 0 v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="2" y="6" width="8" height="7" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="9.5" r="0.7" fill="currentColor"/></svg></span>`,
+          );
+          // Desktop hover tooltip — invisible on mobile, harmless to include.
+          btn.title = "Tam okumayla açılır";
+        }
+        lockNote.hidden = false;
       } else {
-        postActions.hidden = false;
-        const listenBtn = postActions.querySelector(".action-listen-all");
-        const printBtn = postActions.querySelector(".action-print");
+        lockNote.hidden = true;
 
         // Sequential playback through all 11 sections using the single
         // chainAudio element. Cache hits make this near-seamless; cache
