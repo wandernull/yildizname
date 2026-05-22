@@ -2,7 +2,13 @@ import { Hono } from "hono";
 import { getReading, insertReading, unlockReading } from "./lib/db";
 import { generateYildizname } from "./lib/llm";
 import { defaultPaymentProvider } from "./lib/payment";
-import type { Env, FormData } from "./lib/types";
+import { fetchCachedAudio, synthesizeStream, ttsKey } from "./lib/tts";
+import {
+  LOCKED_SECTION_KEYS,
+  type Env,
+  type FormData,
+  type SectionKey,
+} from "./lib/types";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -148,6 +154,69 @@ app.post("/api/unlock", async (c) => {
     return c.json({ success: false, error: "Okuma açılamadı." }, 500);
   }
   return c.json({ success: true, transactionId: result.transactionId });
+});
+
+// ----- TTS ------------------------------------------------------------------
+// GET /api/tts/:readingId/:section
+//   - karakterinOzu is always free (the audio prepends the kapakSözü so the
+//     first words the user hears are the literary mısra)
+//   - the 9 locked sections require reading.unlocked = true
+//   - response is audio/mpeg, served from R2 cache when present and
+//     freshly synthesized via ElevenLabs streaming when not
+
+const FREE_SECTION: SectionKey = "karakterinOzu";
+const ALLOWED_SECTIONS = new Set<SectionKey>([
+  FREE_SECTION,
+  ...LOCKED_SECTION_KEYS,
+]);
+
+app.get("/api/tts/:readingId/:section", async (c) => {
+  const readingId = c.req.param("readingId");
+  const section = c.req.param("section") as SectionKey;
+
+  if (!ALLOWED_SECTIONS.has(section)) {
+    return c.json({ error: "Geçersiz bölüm." }, 400);
+  }
+
+  const reading = await getReading(c.env.DB, readingId);
+  if (!reading || !reading.sections) {
+    return c.json({ error: "Okuma bulunamadı." }, 404);
+  }
+  if (section !== FREE_SECTION && !reading.unlocked) {
+    return c.json({ error: "Bu bölüm kilitli." }, 403);
+  }
+
+  const audioHeaders = {
+    "Content-Type": "audio/mpeg",
+    "Cache-Control": "public, max-age=1296000, immutable",
+    "X-Content-Type-Options": "nosniff",
+  };
+
+  // Cache hit — stream the R2 object straight back.
+  const cached = await fetchCachedAudio(c.env, readingId, section);
+  if (cached) {
+    return new Response(cached.body, { headers: audioHeaders });
+  }
+
+  // Cache miss — synthesise via ElevenLabs, tee to R2 in the background.
+  try {
+    const stream = await synthesizeStream(
+      c.env,
+      c.executionCtx,
+      readingId,
+      section,
+      reading.sections,
+    );
+    return new Response(stream, { headers: audioHeaders });
+  } catch (err) {
+    console.error("[tts] synthesize failed", {
+      readingId,
+      section,
+      err: err instanceof Error ? err.message : String(err),
+      key: ttsKey(readingId, section),
+    });
+    return c.json({ error: "Müneccim sesi şu an gelmiyor." }, 502);
+  }
 });
 
 // ----- SPA fallback ---------------------------------------------------------

@@ -568,6 +568,24 @@ h4 {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.audio-btn.loading {
+  opacity: 0.7;
+  cursor: progress;
+}
+/* Gentle pulse on the play button when browser blocked auto-play. Nudges
+   the user to tap without being noisy. */
+.audio-btn.pulse {
+  animation: audio-pulse 2.6s ease-in-out infinite;
+}
+@keyframes audio-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(201, 168, 76, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 14px rgba(201, 168, 76, 0);
+  }
+}
 .audio-label {
   margin-left: auto;
   font-family: var(--font-display);

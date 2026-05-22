@@ -38,3 +38,9 @@ export function unlockReading(id) {
     body: JSON.stringify({ id }),
   });
 }
+
+// Audio URL for a (reading, section) pair. Server handles unlock checks +
+// R2 cache + ElevenLabs fallback. Consumer just slaps this on an <audio src>.
+export function ttsUrl(readingId, section) {
+  return `/api/tts/${encodeURIComponent(readingId)}/${encodeURIComponent(section)}`;
+}

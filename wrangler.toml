@@ -26,11 +26,24 @@ database_name = "yildizname-db"
 database_id = "3c3b716c-0d08-4a67-ad7a-ce45f5668be1"
 migrations_dir = "migrations"
 
-# Non-secret runtime config goes here. Secrets (ANTHROPIC_API_KEY, later
-# STRIPE_SECRET_KEY) are set via `wrangler secret put` for production, and
-# via `.dev.vars` for local dev.
+# Non-secret runtime config goes here. Secrets (ANTHROPIC_API_KEY,
+# ELEVENLABS_API_KEY, later STRIPE_SECRET_KEY) are set via `wrangler secret
+# put` for production, and via `.dev.vars` for local dev.
 [vars]
 READING_PRICE_TRY = "250"
+# Stock ElevenLabs voice — deep male, decent Turkish. Swap by changing this
+# constant; nothing else needs to move. Will be replaced with a cloned
+# müneccim voice in Phase 2 once paying customers validate the bet.
+ELEVENLABS_VOICE_ID = "J17lijyP1BHYcM7ld0Rg"
+ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
+
+# TTS audio cache — R2 bucket with a 15-day lifecycle rule (set out-of-band
+# via `wrangler r2 bucket lifecycle add yildizname-tts --name expire-15d
+# --expire-days 15`). One object per reading × section, keyed as
+# tts/{readingId}/{section}.mp3.
+[[r2_buckets]]
+binding = "TTS_BUCKET"
+bucket_name = "yildizname-tts"
 
 # Worker Custom Domains are attached out-of-band via the Cloudflare API
 # because the CI deploy token (CLOUDFLARE_API_TOKEN) is scoped narrowly for

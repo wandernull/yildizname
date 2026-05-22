@@ -71,6 +71,10 @@ export interface Reading {
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
+  TTS_BUCKET: R2Bucket;
   ANTHROPIC_API_KEY: string;
+  ELEVENLABS_API_KEY: string;
+  ELEVENLABS_VOICE_ID: string;
+  ELEVENLABS_MODEL_ID: string;
   READING_PRICE_TRY: string;
 }

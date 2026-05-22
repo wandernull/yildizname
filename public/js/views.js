@@ -4,7 +4,13 @@
 
 import { LOCKED_SECTION_KEYS, SECTION_TITLES } from "./sections.js";
 import * as api from "./api.js";
-import * as tts from "./tts.js";
+
+// Set in /loading right before the /result navigation, consumed by /result on
+// mount. Distinguishes "user just completed the form journey" (autoplay the
+// free section's audio for the hook effect) from "user landed on this URL via
+// share / refresh / back button" (don't autoplay — they didn't earn the
+// ritual moment and would be ambushed by sudden audio).
+const JOURNEY_FLAG = "yildizname:from-journey";
 
 const MONTHS_TR = [
   "Ocak",
@@ -342,6 +348,9 @@ export function renderLoading(router) {
         if (cancelled) return;
         try {
           window.sessionStorage.removeItem(FORM_SESSION_KEY);
+          // Mark the upcoming /result render as "user came through the
+          // ritual" so it can autoplay karakterinOzu.
+          window.sessionStorage.setItem(JOURNEY_FLAG, "1");
         } catch {
           /* ignore */
         }
@@ -365,16 +374,9 @@ export function renderLoading(router) {
 // ----------------------------------------------------------------------------
 
 function paragraphHtml(text) {
-  // Split into paragraphs by blank lines, then into sentence spans for highlight.
   return text
     .split(/\n+/)
-    .map((p) => {
-      const sentences = p.split(/(?<=[.!?…])\s+/);
-      const spans = sentences
-        .map((s) => `<span class="sentence">${escapeHtml(s)} </span>`)
-        .join("");
-      return `<p>${spans}</p>`;
-    })
+    .map((p) => `<p>${escapeHtml(p)}</p>`)
     .join("");
 }
 
@@ -385,20 +387,39 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
-function makeAudioPlayer(text, sectionBodyEl) {
+const PLAY_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M2 1 L13 7 L2 13 Z"/></svg>`;
+const PAUSE_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="1" width="3" height="12"/><rect x="9" y="1" width="3" height="12"/></svg>`;
+
+// Smoothly ramp the audio volume from `from` → `to` over `durationMs` using
+// requestAnimationFrame. Used for the autoplay fade-in so the müneccim
+// doesn't slap the user with full volume on the first syllable.
+function fadeVolume(audio, from, to, durationMs) {
+  audio.volume = from;
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / durationMs);
+    audio.volume = from + (to - from) * t;
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// Build a native <audio>-backed player for one (reading, section).
+// Returns { wrap, audio, dispose } — the caller wires dispose into the
+// view-cleanup hook so audio stops on navigation away.
+function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStopped }) {
   const wrap = document.createElement("div");
   wrap.className = "audio-player";
 
-  if (!tts.isSupported()) {
-    wrap.innerHTML = `<p class="audio-label">Sesli okuma tarayıcınızda desteklenmiyor.</p>`;
-    return wrap;
-  }
+  const audio = new Audio();
+  audio.preload = autoplay ? "auto" : "none";
+  audio.src = api.ttsUrl(readingId, sectionKey);
 
   const playBtn = document.createElement("button");
   playBtn.type = "button";
   playBtn.className = "audio-btn play";
   playBtn.setAttribute("aria-label", "Dinle");
-  playBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M2 1 L13 7 L2 13 Z"/></svg>`;
+  playBtn.innerHTML = PLAY_ICON;
 
   const stopBtn = document.createElement("button");
   stopBtn.type = "button";
@@ -417,97 +438,103 @@ function makeAudioPlayer(text, sectionBodyEl) {
 
   wrap.append(playBtn, stopBtn, waveform, label);
 
-  let playing = false;
-  let paused = false;
-
-  const setIcon = (icon) => {
-    playBtn.innerHTML =
-      icon === "pause"
-        ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="1" width="3" height="12"/><rect x="9" y="1" width="3" height="12"/></svg>`
-        : `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M2 1 L13 7 L2 13 Z"/></svg>`;
-  };
-
-  const highlight = (charIndex) => {
-    if (!sectionBodyEl) return;
-    const spans = sectionBodyEl.querySelectorAll(".sentence");
-    if (charIndex < 0) {
-      spans.forEach((s) => s.classList.remove("active"));
-      return;
-    }
-    let cursor = 0;
-    for (const span of spans) {
-      const len = span.textContent.length;
-      const isActive = charIndex >= cursor && charIndex < cursor + len;
-      span.classList.toggle("active", isActive);
-      cursor += len;
-    }
-  };
-
-  playBtn.addEventListener("click", () => {
-    if (playing) {
-      tts.pause();
-      paused = true;
-      playing = false;
-      label.textContent = "Duraklatıldı";
-      setIcon("play");
-      waveform.classList.remove("active");
-      return;
-    }
-    if (paused) {
-      tts.resume();
-      paused = false;
-      playing = true;
-      label.textContent = "Müneccim okuyor…";
-      setIcon("pause");
-      waveform.classList.add("active");
-      return;
-    }
-    tts.speak({
-      text,
-      onBoundary: highlight,
-      onEnd: () => {
-        playing = false;
-        paused = false;
-        label.textContent = "Sesli dinle";
-        setIcon("play");
-        waveform.classList.remove("active");
-        stopBtn.disabled = true;
-        highlight(-1);
-      },
-      onError: () => {
-        playing = false;
-        paused = false;
-        label.textContent = "Sesli dinle";
-        setIcon("play");
-        waveform.classList.remove("active");
-        stopBtn.disabled = true;
-      },
-    });
-    playing = true;
-    paused = false;
-    label.textContent = "Müneccim okuyor…";
-    setIcon("pause");
+  const setUiPlaying = () => {
+    playBtn.innerHTML = PAUSE_ICON;
+    playBtn.classList.remove("pulse", "loading");
     waveform.classList.add("active");
     stopBtn.disabled = false;
+    label.textContent = "Müneccim okuyor…";
+  };
+  const setUiPaused = () => {
+    playBtn.innerHTML = PLAY_ICON;
+    waveform.classList.remove("active");
+    label.textContent = "Duraklatıldı";
+  };
+  const setUiIdle = (msg = "Sesli dinle") => {
+    playBtn.innerHTML = PLAY_ICON;
+    waveform.classList.remove("active");
+    stopBtn.disabled = true;
+    label.textContent = msg;
+  };
+  const setUiLoading = () => {
+    playBtn.classList.add("loading");
+    label.textContent = "Hazırlanıyor…";
+  };
+
+  audio.addEventListener("waiting", setUiLoading);
+  audio.addEventListener("playing", setUiPlaying);
+  audio.addEventListener("pause", () => {
+    if (!audio.ended) setUiPaused();
+  });
+  audio.addEventListener("ended", () => setUiIdle());
+  audio.addEventListener("error", () => {
+    playBtn.classList.remove("loading", "pulse");
+    setUiIdle("Ses gelmedi. Tekrar dener misin?");
+  });
+
+  playBtn.addEventListener("click", () => {
+    playBtn.classList.remove("pulse");
+    if (audio.paused) {
+      const p = audio.play();
+      if (p && typeof p.then === "function") p.catch(() => setUiIdle());
+    } else {
+      audio.pause();
+    }
   });
 
   stopBtn.addEventListener("click", () => {
-    tts.stop();
-    playing = false;
-    paused = false;
-    label.textContent = "Sesli dinle";
-    setIcon("play");
-    waveform.classList.remove("active");
-    stopBtn.disabled = true;
-    highlight(-1);
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch {
+      /* may throw if metadata not loaded yet */
+    }
+    if (manuallyStopped) manuallyStopped();
+    setUiIdle();
   });
 
-  return wrap;
+  // Autoplay attempt. Modern browsers reject the play() Promise when there's
+  // no recent user gesture (iOS Safari is the strictest); in that case we
+  // pulse the play button instead of failing silently.
+  if (autoplay) {
+    fadeVolume(audio, 0, 1, 2000);
+    const p = audio.play();
+    if (p && typeof p.then === "function") {
+      p.catch(() => {
+        audio.volume = 1; // restore so a manual click plays at normal volume
+        playBtn.classList.add("pulse");
+      });
+    }
+  }
+
+  const dispose = () => {
+    try {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return { wrap, audio, dispose };
 }
 
-function makeSection(title, text, opts = {}) {
+// makeSection returns { node, dispose } for unlocked sections (so the
+// caller can pause audio on view-cleanup) or { node, dispose: noop } for
+// locked sections. Caller passes `manuallyStopped` to be notified when the
+// user pressed the stop button — used to keep the journey-autoplay one-shot.
+function makeSection({
+  title,
+  text,
+  locked,
+  readingId,
+  sectionKey,
+  autoplay,
+  manuallyStopped,
+}) {
   const section = document.createElement("section");
-  section.className = "section" + (opts.locked ? " locked" : "");
+  section.className = "section" + (locked ? " locked" : "");
 
   const h3 = document.createElement("h3");
   h3.textContent = title;
@@ -516,7 +543,7 @@ function makeSection(title, text, opts = {}) {
   const body = document.createElement("div");
   body.className = "section-body";
 
-  if (opts.locked) {
+  if (locked) {
     body.innerHTML = `
       <p>················································ ······· ···········</p>
       <p>·········· ·············· ······ ·············· ······· ··········</p>
@@ -527,7 +554,7 @@ function makeSection(title, text, opts = {}) {
   }
   section.appendChild(body);
 
-  if (opts.locked) {
+  if (locked) {
     const overlay = document.createElement("div");
     overlay.className = "lock-overlay";
     overlay.innerHTML = `
@@ -538,10 +565,17 @@ function makeSection(title, text, opts = {}) {
       </svg>
     `;
     section.appendChild(overlay);
-  } else {
-    section.appendChild(makeAudioPlayer(text, body));
+    return { node: section, dispose: () => {} };
   }
-  return section;
+
+  const player = makeAudioPlayer({
+    readingId,
+    sectionKey,
+    autoplay,
+    manuallyStopped,
+  });
+  section.appendChild(player.wrap);
+  return { node: section, dispose: player.dispose };
 }
 
 function makePaymentBlock(id, router) {
@@ -587,8 +621,43 @@ export function renderResult(router, { id, unlockedQuery }) {
   // initial placeholder while we fetch
   kapakSozuEl.textContent = "Okuma açılıyor…";
 
-  const cleanup = () => tts.stop();
-  root.addEventListener("view:cleanup", cleanup);
+  // Track every disposable (per-section audio + the chain-play audio) so we
+  // can stop them all if the user navigates away.
+  const disposables = [];
+  const chainAudio = new Audio();
+  chainAudio.preload = "none";
+  disposables.push(() => {
+    try {
+      chainAudio.pause();
+      chainAudio.removeAttribute("src");
+      chainAudio.load();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  root.addEventListener("view:cleanup", () => {
+    for (const d of disposables) d();
+  });
+
+  // Consume the journey flag exactly once. Set in renderLoading right before
+  // /result navigation; absent on refreshes, shared links, back-button.
+  let journeyAutoplay = false;
+  try {
+    if (window.sessionStorage.getItem(JOURNEY_FLAG) === "1") {
+      journeyAutoplay = true;
+      window.sessionStorage.removeItem(JOURNEY_FLAG);
+    }
+  } catch {
+    /* ignore */
+  }
+  // If the user manually stops the autoplay, don't auto-do-anything else this
+  // session. Conservative: even subsequent locked-section playback is purely
+  // opt-in after that point.
+  let userStoppedOnce = false;
+  const markStopped = () => {
+    userStoppedOnce = true;
+  };
 
   (async () => {
     try {
@@ -597,9 +666,17 @@ export function renderResult(router, { id, unlockedQuery }) {
       kapakSozuEl.textContent = data.kapakSozu;
 
       sectionsHost.replaceChildren();
-      sectionsHost.appendChild(
-        makeSection(SECTION_TITLES.karakterinOzu, data.karakterinOzu),
-      );
+
+      const freeSection = makeSection({
+        title: SECTION_TITLES.karakterinOzu,
+        text: data.karakterinOzu,
+        readingId: id,
+        sectionKey: "karakterinOzu",
+        autoplay: journeyAutoplay && !userStoppedOnce,
+        manuallyStopped: markStopped,
+      });
+      sectionsHost.appendChild(freeSection.node);
+      disposables.push(freeSection.dispose);
 
       const orn = document.createElement("div");
       orn.className = "ornament";
@@ -610,11 +687,21 @@ export function renderResult(router, { id, unlockedQuery }) {
       for (const key of LOCKED_SECTION_KEYS) {
         const text = data[key];
         if (isUnlocked && typeof text === "string" && text.length > 0) {
-          sectionsHost.appendChild(makeSection(SECTION_TITLES[key], text));
+          const sec = makeSection({
+            title: SECTION_TITLES[key],
+            text,
+            readingId: id,
+            sectionKey: key,
+            manuallyStopped: markStopped,
+          });
+          sectionsHost.appendChild(sec.node);
+          disposables.push(sec.dispose);
         } else {
-          sectionsHost.appendChild(
-            makeSection(SECTION_TITLES[key], "", { locked: true }),
-          );
+          const sec = makeSection({
+            title: SECTION_TITLES[key],
+            locked: true,
+          });
+          sectionsHost.appendChild(sec.node);
         }
       }
 
@@ -625,32 +712,47 @@ export function renderResult(router, { id, unlockedQuery }) {
         const listenBtn = postActions.querySelector(".action-listen-all");
         const printBtn = postActions.querySelector(".action-print");
 
-        let chainPlaying = false;
-        listenBtn.addEventListener("click", () => {
-          if (chainPlaying) {
-            tts.stop();
-            chainPlaying = false;
+        // Sequential playback through all 11 sections using the single
+        // chainAudio element. Cache hits make this near-seamless; cache
+        // misses incur a per-section synthesis delay.
+        const queue = ["karakterinOzu", ...LOCKED_SECTION_KEYS];
+        let queueIdx = 0;
+        let chainActive = false;
+
+        const onEndedAdvance = () => {
+          if (!chainActive) return;
+          queueIdx += 1;
+          if (queueIdx >= queue.length) {
+            chainActive = false;
             listenBtn.textContent = "Baştan Sona Dinle";
             return;
           }
-          const allText = [
-            data.karakterinOzu,
-            ...LOCKED_SECTION_KEYS.map((k) => data[k]).filter(
-              (t) => typeof t === "string" && t.length > 0,
-            ),
-          ].join("\n\n");
-          tts.speak({
-            text: allText,
-            onEnd: () => {
-              chainPlaying = false;
-              listenBtn.textContent = "Baştan Sona Dinle";
-            },
-            onError: () => {
-              chainPlaying = false;
-              listenBtn.textContent = "Baştan Sona Dinle";
-            },
+          chainAudio.src = api.ttsUrl(id, queue[queueIdx]);
+          chainAudio.play().catch(() => {
+            chainActive = false;
+            listenBtn.textContent = "Baştan Sona Dinle";
           });
-          chainPlaying = true;
+        };
+        chainAudio.addEventListener("ended", onEndedAdvance);
+        chainAudio.addEventListener("error", () => {
+          chainActive = false;
+          listenBtn.textContent = "Baştan Sona Dinle";
+        });
+
+        listenBtn.addEventListener("click", () => {
+          if (chainActive) {
+            chainActive = false;
+            chainAudio.pause();
+            listenBtn.textContent = "Baştan Sona Dinle";
+            return;
+          }
+          chainActive = true;
+          queueIdx = 0;
+          chainAudio.src = api.ttsUrl(id, queue[queueIdx]);
+          chainAudio.play().catch(() => {
+            chainActive = false;
+            listenBtn.textContent = "Baştan Sona Dinle";
+          });
           listenBtn.textContent = "Sesi Durdur";
         });
 

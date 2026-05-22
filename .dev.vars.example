@@ -1,7 +1,8 @@
 # Copy to .dev.vars (gitignored) for local `wrangler dev`.
-# For production, use `wrangler secret put ANTHROPIC_API_KEY`.
+# For production, use `wrangler secret put <NAME>` per variable.
 
 ANTHROPIC_API_KEY="sk-ant-..."
+ELEVENLABS_API_KEY="sk_..."
 
 # Future:
 # STRIPE_SECRET_KEY="sk_test_..."
