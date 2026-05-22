@@ -3,6 +3,17 @@ main = "src/index.ts"
 compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Persist console.log / console.error output to the Cloudflare dashboard's
+# Logs tab for ~3-7 days, searchable by status code / time range / message.
+# Without this only `wrangler tail` (live stream) sees the output and
+# anything not actively tailed is lost — same hole that made debugging the
+# waitUntil cancellation harder than it needed to be.
+# head_sampling_rate = 1.0 keeps 100% of requests; sampling kicks in only
+# if free-tier daily-event limits become a problem later.
+[observability]
+enabled = true
+head_sampling_rate = 1.0
+
 # Static frontend (vanilla HTML/CSS/JS) lives in ./public and is served by
 # Workers Assets. Asset requests are matched first; anything not found here
 # falls through to the Worker (which serves index.html for SPA routes and
