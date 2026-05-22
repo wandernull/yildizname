@@ -409,40 +409,73 @@ h4 {
 .view-loading {
   display: grid;
   justify-items: center;
-  gap: 2rem;
+  gap: 2.25rem;
 }
-.constellation {
-  width: 220px;
-  height: 120px;
+
+.loading-orbit {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 1.5rem;
+  justify-items: center;
+}
+
+/* Moon — central anchor, cycles all 8 phases over 60s alternate-infinite. */
+.moon-phase {
+  width: min(260px, 62vw);
+  height: auto;
+  filter: drop-shadow(0 0 36px rgba(232, 208, 138, 0.3));
+}
+.moon-phase-shadow {
+  animation: moon-phase-cycle 60s ease-in-out infinite alternate;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes moon-phase-cycle {
+  0% {
+    transform: translateX(-140px);
+  }
+  100% {
+    transform: translateX(140px);
+  }
+}
+
+/* Constellation parade — JS spawns one SVG at a time; CSS handles draw/twinkle. */
+.constellation-host {
+  position: relative;
+  width: min(300px, 70vw);
+  height: 130px;
+}
+.constellation-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+.constellation-svg.show {
+  opacity: 1;
 }
 .constellation-line {
   stroke: var(--gold);
   stroke-width: 1;
-  stroke-dasharray: 400;
-  stroke-dashoffset: 400;
+  fill: none;
+  stroke-dasharray: 500;
+  stroke-dashoffset: 500;
   filter: drop-shadow(0 0 4px rgba(201, 168, 76, 0.4));
-  animation: draw 3s ease-out forwards, glow 4s ease-in-out 3s infinite;
+  animation: cn-draw 3.5s ease-out forwards;
 }
-@keyframes draw {
+@keyframes cn-draw {
   to {
     stroke-dashoffset: 0;
   }
 }
-@keyframes glow {
-  0%,
-  100% {
-    filter: drop-shadow(0 0 4px rgba(201, 168, 76, 0.4));
-  }
-  50% {
-    filter: drop-shadow(0 0 12px rgba(201, 168, 76, 0.7));
-  }
-}
-.cn-star {
+.constellation-star {
   fill: var(--star);
-  animation: twinkle 2s ease-in-out infinite;
-  animation-delay: calc(var(--i) * 0.3s);
+  animation: cn-twinkle 2.2s ease-in-out infinite;
 }
-@keyframes twinkle {
+@keyframes cn-twinkle {
   0%,
   100% {
     opacity: 0.4;
@@ -451,11 +484,59 @@ h4 {
     opacity: 1;
   }
 }
-.loading-msg {
+.constellation-name {
+  fill: var(--gold-light);
   font-family: var(--font-display);
   font-style: italic;
-  font-size: clamp(1.2rem, 3vw, 1.6rem);
+  font-size: 9px;
+  text-anchor: middle;
+  opacity: 0;
+  animation: cn-name-in 0.8s ease-out 1.5s forwards;
+}
+@keyframes cn-name-in {
+  to {
+    opacity: 0.85;
+  }
+}
+
+/* Ambient harfler — Arabic letters drift up and fade. JS spawns one every ~5-7s. */
+.harfler-host {
+  position: absolute;
+  inset: -30px;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ambient-harf {
+  position: absolute;
+  color: var(--gold);
+  font-family: "Cormorant Garamond", "Noto Naskh Arabic", serif;
+  font-size: clamp(1.5rem, 4vw, 2.2rem);
+  opacity: 0;
+  text-shadow: 0 0 12px rgba(201, 168, 76, 0.4);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Phased text — primary (gold shimmer) + secondary (muted) */
+.loading-primary {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: clamp(1.3rem, 3.2vw, 1.7rem);
   margin: 0;
+  text-align: center;
+  min-height: 1.6em;
+  transition: opacity 0.5s ease;
+  max-width: 32ch;
+}
+.loading-secondary {
+  font-family: var(--font-body);
+  color: rgba(184, 196, 212, 0.6);
+  font-style: italic;
+  font-size: clamp(0.9rem, 2.1vw, 1.05rem);
+  margin: 0;
+  text-align: center;
+  min-height: 1.4em;
+  max-width: 40ch;
   transition: opacity 0.5s ease;
 }
 

@@ -27,11 +27,128 @@ const MONTHS_TR = [
   "Aralık",
 ];
 
-const LOADING_MESSAGES = [
-  "Müneccim harflerini okuyor…",
-  "Ay burçta hizalanıyor…",
-  "Ebced hesabı tamamlanıyor…",
-  "Kader yazılıyor…",
+// Phased loading text. Time-gated by elapsed seconds; within each phase the
+// 3 primary/secondary lines cycle every ~4.5s for variety. Designed so the
+// last phase ("Yıldızname dürülüyor…") feels like an arrival — and if the
+// LLM call runs over 2:30, that last phase keeps cycling gracefully.
+const LOADING_PHASES = [
+  {
+    startSec: 0,
+    primary: [
+      "Müneccim divânını açıyor…",
+      "Eskimiş cilt aralanıyor…",
+      "Yıldız sayfası açılıyor…",
+    ],
+    secondary: [
+      "Bir kapı kapanır, bir kapı açılır.",
+      "Sayfanın kokusu kadim.",
+      "Mâzi, hâle bakar.",
+    ],
+  },
+  {
+    startSec: 22,
+    primary: [
+      "Harfler ebced cetveline düşüyor…",
+      "Adın sayılara dönüşüyor…",
+      "Anne adı altın iplikle iliştiriliyor…",
+    ],
+    secondary: [
+      "Elif 1, bâ 2, cîm 3, dâl 4…",
+      "Her harf bir kapı, her sayı bir kilit.",
+      "Ne yazılıysa orada toplanır.",
+    ],
+  },
+  {
+    startSec: 45,
+    primary: [
+      "Ay yirmi sekiz menzilinden geçiyor…",
+      "Burç hizalanıyor…",
+      "Doğum vakti yerine oturuyor…",
+    ],
+    secondary: [
+      "Şereteyn, Butayn, Süreyya, Deberân…",
+      "Felek dönüyor, çark işliyor.",
+      "Vakit ne dediyse o yazılır.",
+    ],
+  },
+  {
+    startSec: 68,
+    primary: [
+      "Yedi yıldız hizalanıyor…",
+      "Gezegenler raptediliyor…",
+      "Gökyüzü hesabı tamamlanıyor…",
+    ],
+    secondary: [
+      "Şems, Kamer, Mirrîh, Utârid, Müşterî, Zühre, Zühal.",
+      "Her birinin ayrı hükmü var.",
+      "Sayılar mührünü vuruyor.",
+    ],
+  },
+  {
+    startSec: 90,
+    primary: [
+      "Hükümler kantarda tartılıyor…",
+      "Hayır ve şer aynı sayfada…",
+      "Müneccim kalemini sürtüyor…",
+    ],
+    secondary: [
+      "Doğru söz, eğri söz olmaz.",
+      "Ne ışık tek başına, ne gölge.",
+      "Adâlet terazide.",
+    ],
+  },
+  {
+    startSec: 112,
+    primary: [
+      "Yıldızname dürülüyor…",
+      "Mühür düşmek üzere…",
+      "Son satır mürekkep alıyor…",
+    ],
+    secondary: [
+      "Bir an sonra önündedir.",
+      "Ne yazıldıysa kalıcıdır.",
+      "Sabret biraz daha.",
+    ],
+  },
+];
+
+// 5 hand-laid constellations rendered into a 200×120 viewBox. The names use
+// Ottoman/medieval-Islamic naming tradition where it fits cleanly.
+const CONSTELLATIONS = [
+  {
+    name: "Süreyya",
+    points: [[80, 50], [95, 45], [110, 50], [120, 55], [85, 65], [105, 65]],
+    lines: [[0, 1], [1, 2], [2, 3], [1, 4], [2, 5]],
+  },
+  {
+    name: "Cevza",
+    points: [[80, 40], [120, 40], [100, 60], [85, 60], [115, 60], [80, 85], [120, 85]],
+    lines: [[0, 1], [0, 3], [1, 4], [3, 4], [3, 5], [4, 6]],
+  },
+  {
+    name: "Yedi Kardeşler",
+    points: [[60, 70], [75, 65], [90, 60], [105, 60], [115, 75], [105, 90], [75, 90]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 3]],
+  },
+  {
+    name: "Akrep",
+    points: [[70, 50], [85, 55], [100, 60], [115, 65], [115, 80], [125, 90], [135, 85]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]],
+  },
+  {
+    name: "Tâcüssema",
+    points: [[70, 65], [80, 55], [95, 50], [110, 50], [125, 55], [135, 65]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]],
+  },
+];
+
+// The 28-letter abjad set. One is plucked at random every few seconds for
+// the ambient harfler — adds the "ilm-i hurûf" texture without taking
+// focus from the moon or the constellations.
+const HARFLER = [
+  "ا", "ب", "ج", "د", "ه", "و", "ز", "ح", "ط", "ي",
+  "ك", "ل", "م", "ن", "س", "ع", "ف", "ص", "ق", "ر",
+  "ش", "ت", "ث", "خ", "ذ", "ض", "ظ", "غ",
 ];
 
 const FORM_SESSION_KEY = "yildizname:form";
@@ -280,40 +397,188 @@ export function renderForm(router) {
 // Synchronous loading screen: POST /api/generate keeps the connection open
 // for the ~2–3 minute LLM call (the Worker streams Anthropic's SSE response
 // internally so neither the subrequest nor waitUntil limits trip). The
-// cycling messages and the constellation animation keep the surface alive
-// while we wait.
+// loading surface itself is rich enough to sit through for two minutes —
+// moon-phase cycle + constellation parade + phased status text + ambient
+// Arabic letters drifting in the periphery.
 const MIN_LOADING_MS = 2500;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function pickPhase(elapsedSec) {
+  let phaseIdx = 0;
+  for (let i = 0; i < LOADING_PHASES.length; i++) {
+    if (LOADING_PHASES[i].startSec <= elapsedSec) phaseIdx = i;
+  }
+  return phaseIdx;
+}
+
+function spawnConstellation(host, def) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 200 130");
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.classList.add("constellation-svg");
+
+  // Single path covering all the lines so stroke-dashoffset animates the
+  // whole figure in one sweep.
+  const path = document.createElementNS(SVG_NS, "path");
+  let d = "";
+  for (const [a, b] of def.lines) {
+    const [ax, ay] = def.points[a];
+    const [bx, by] = def.points[b];
+    d += `M ${ax} ${ay} L ${bx} ${by} `;
+  }
+  path.setAttribute("d", d);
+  path.classList.add("constellation-line");
+  svg.appendChild(path);
+
+  for (let i = 0; i < def.points.length; i++) {
+    const [x, y] = def.points[i];
+    const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("cx", String(x));
+    c.setAttribute("cy", String(y));
+    c.setAttribute("r", "1.8");
+    c.classList.add("constellation-star");
+    c.style.animationDelay = (i * 0.22).toFixed(2) + "s";
+    svg.appendChild(c);
+  }
+
+  const text = document.createElementNS(SVG_NS, "text");
+  text.setAttribute("x", "100");
+  text.setAttribute("y", "120");
+  text.classList.add("constellation-name");
+  text.textContent = def.name;
+  svg.appendChild(text);
+
+  host.appendChild(svg);
+  requestAnimationFrame(() => svg.classList.add("show"));
+  return svg;
+}
+
+function startConstellationParade(host) {
+  let idx = Math.floor(Math.random() * CONSTELLATIONS.length);
+  let current = null;
+  let stopped = false;
+  let timer = 0;
+
+  const next = () => {
+    if (stopped) return;
+    if (current) {
+      const old = current;
+      old.classList.remove("show");
+      window.setTimeout(() => old.remove(), 1200);
+    }
+    current = spawnConstellation(host, CONSTELLATIONS[idx % CONSTELLATIONS.length]);
+    idx += 1;
+    timer = window.setTimeout(next, 16000);
+  };
+  next();
+
+  return () => {
+    stopped = true;
+    if (timer) window.clearTimeout(timer);
+    if (current) current.remove();
+  };
+}
+
+function spawnHarf(host) {
+  const letter = HARFLER[Math.floor(Math.random() * HARFLER.length)];
+  const el = document.createElement("span");
+  el.className = "ambient-harf";
+  el.textContent = letter;
+  el.style.left = (Math.random() * 80 + 8) + "%";
+  el.style.top = (Math.random() * 75 + 12) + "%";
+  host.appendChild(el);
+  const anim = el.animate(
+    [
+      { opacity: 0, transform: "translateY(8px)" },
+      { opacity: 0.55, transform: "translateY(-12px)", offset: 0.45 },
+      { opacity: 0, transform: "translateY(-38px)" },
+    ],
+    { duration: 4500, easing: "ease-out", fill: "forwards" },
+  );
+  anim.onfinish = () => el.remove();
+}
+
+function startHarfler(host) {
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    if (!document.hidden) spawnHarf(host);
+    const next = 4200 + Math.random() * 3000;
+    window.setTimeout(tick, next);
+  };
+  // First one a bit delayed so the user sees the moon land first.
+  window.setTimeout(tick, 1500);
+  return () => {
+    stopped = true;
+  };
+}
 
 export function renderLoading(router) {
   const root = tpl("tpl-loading");
-  const msgEl = root.querySelector(".loading-msg");
+  const primaryEl = root.querySelector(".loading-primary");
+  const secondaryEl = root.querySelector(".loading-secondary");
+  const constellationHost = root.querySelector(".constellation-host");
+  const harflerHost = root.querySelector(".harfler-host");
 
-  let idx = 0;
   let cancelled = false;
   let navTimer = 0;
+  const startedAt = Date.now();
 
-  const cycle = window.setInterval(() => {
-    idx = (idx + 1) % LOADING_MESSAGES.length;
-    msgEl.style.opacity = "0";
-    setTimeout(() => {
+  // Start everything that isn't text rotation immediately — the moon
+  // animation is pure CSS, the constellation parade and harfler each
+  // self-schedule.
+  const stopConstellations = startConstellationParade(constellationHost);
+  const stopHarfler = startHarfler(harflerHost);
+
+  // Phased text. Initial render is immediate (no fade); subsequent rotations
+  // fade out → swap → fade in. Each phase has 3 primary + 3 secondary lines
+  // that cycle within the phase every ~4.5s.
+  let phaseIdx = 0;
+  let lineIdx = 0;
+  const swap = (el, text) => {
+    el.style.opacity = "0";
+    window.setTimeout(() => {
       if (cancelled) return;
-      msgEl.textContent = LOADING_MESSAGES[idx];
-      msgEl.style.opacity = "1";
-    }, 250);
-  }, 1600);
+      el.textContent = text;
+      el.style.opacity = "1";
+    }, 280);
+  };
+  const rotate = () => {
+    if (cancelled) return;
+    const elapsedSec = (Date.now() - startedAt) / 1000;
+    const newPhaseIdx = pickPhase(elapsedSec);
+    if (newPhaseIdx !== phaseIdx) {
+      phaseIdx = newPhaseIdx;
+      lineIdx = 0;
+    } else {
+      lineIdx += 1;
+    }
+    const phase = LOADING_PHASES[phaseIdx];
+    swap(primaryEl, phase.primary[lineIdx % phase.primary.length]);
+    swap(secondaryEl, phase.secondary[lineIdx % phase.secondary.length]);
+  };
+  // Render phase 0 / line 0 immediately, no fade.
+  primaryEl.textContent = LOADING_PHASES[0].primary[0];
+  secondaryEl.textContent = LOADING_PHASES[0].secondary[0];
+  primaryEl.style.opacity = "1";
+  secondaryEl.style.opacity = "1";
+  const textTimer = window.setInterval(rotate, 4500);
 
   const cleanup = () => {
     cancelled = true;
-    window.clearInterval(cycle);
+    window.clearInterval(textTimer);
     if (navTimer) window.clearTimeout(navTimer);
+    stopConstellations();
+    stopHarfler();
   };
   root.addEventListener("view:cleanup", cleanup);
 
   const showError = (message) => {
     cleanup();
-    msgEl.textContent = message || "Yıldızlar şu an okunamıyor.";
-    msgEl.style.opacity = "1";
-    msgEl.classList.remove("shimmer-gold");
+    primaryEl.textContent = message || "Yıldızlar şu an okunamıyor.";
+    primaryEl.style.opacity = "1";
+    primaryEl.classList.remove("shimmer-gold");
+    secondaryEl.textContent = "";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-gold-outline";

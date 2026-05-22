@@ -68,19 +68,39 @@
 
     <template id="tpl-loading">
       <section class="view view-loading" data-view="loading">
-        <svg class="constellation" viewBox="0 0 220 120" aria-hidden="true">
-          <path
-            class="constellation-line"
-            d="M 20 90 L 60 50 L 110 70 L 160 30 L 200 80"
-            fill="none"
-          />
-          <circle class="cn-star" cx="20" cy="90" r="2" style="--i: 0" />
-          <circle class="cn-star" cx="60" cy="50" r="2" style="--i: 1" />
-          <circle class="cn-star" cx="110" cy="70" r="2" style="--i: 2" />
-          <circle class="cn-star" cx="160" cy="30" r="2" style="--i: 3" />
-          <circle class="cn-star" cx="200" cy="80" r="2" style="--i: 4" />
-        </svg>
-        <p class="shimmer-gold loading-msg">Müneccim harflerini okuyor…</p>
+        <div class="loading-orbit">
+          <div class="constellation-host" aria-hidden="true"></div>
+          <svg class="moon-phase" viewBox="0 0 200 200" aria-hidden="true">
+            <defs>
+              <radialGradient id="moonPhaseGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#fff5d6" stop-opacity="0.5" />
+                <stop offset="60%" stop-color="#c9a84c" stop-opacity="0.15" />
+                <stop offset="100%" stop-color="#c9a84c" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="moonPhaseBody" cx="35%" cy="35%" r="65%">
+                <stop offset="0%" stop-color="#fff5d6" />
+                <stop offset="100%" stop-color="#c9a84c" />
+              </radialGradient>
+              <clipPath id="moonPhaseClip">
+                <circle cx="100" cy="100" r="60" />
+              </clipPath>
+            </defs>
+            <circle cx="100" cy="100" r="90" fill="url(#moonPhaseGlow)" />
+            <circle cx="100" cy="100" r="60" fill="url(#moonPhaseBody)" />
+            <g clip-path="url(#moonPhaseClip)">
+              <circle
+                class="moon-phase-shadow"
+                cx="100"
+                cy="100"
+                r="60"
+                fill="#0a0e1a"
+              />
+            </g>
+          </svg>
+          <div class="harfler-host" aria-hidden="true"></div>
+        </div>
+        <p class="loading-primary shimmer-gold"></p>
+        <p class="loading-secondary"></p>
       </section>
     </template>
 
