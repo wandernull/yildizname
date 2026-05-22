@@ -23,11 +23,11 @@ Strictly the global "Web stack defaults" from `~/.claude/CLAUDE.md`:
 - **Static assets:** Workers Assets binding (`[assets] directory = "./public"`, `not_found_handling = "none"`; SPA fallback handled inside the Worker)
 - **Relational data:** D1 — single `readings` table, schema in `migrations/0001_init.sql`
 - **Edge state:** KV — not used in v1 (no sessions, rate limits, or caches yet)
-- **Object storage:** R2 — not used in v1 (PDF generation might land in Phase 3)
+- **Object storage:** R2 — bucket `yildizname-tts` caches synthesized audio MP3s at key `tts/{readingId}/{section}.mp3`. 15-day lifecycle rule (set out-of-band via `wrangler r2 bucket lifecycle add`). Free-tier sized: ~600 full readings cached in any 15-day window before storage matters.
 - **Language:** TypeScript, strict; `@cloudflare/workers-types` for Worker globals
 - **LLM:** `@anthropic-ai/sdk` calling `claude-sonnet-4-5` with the Ottoman-müneccim system prompt in `src/lib/llm.ts`. Output is strict JSON validated against `YildiznameSections`. One automatic retry on parse failure.
 - **Frontend UI:** Vanilla HTML/CSS/JS served from `public/`. Cormorant Garamond + Noto Serif loaded from Google Fonts. Canvas star field, CSS keyframes, Web Animations API. No bundler.
-- **TTS:** Browser `window.speechSynthesis` with `lang: "tr-TR"`, slowed rate. Wrapped in `public/js/tts.js`.
+- **TTS:** ElevenLabs `eleven_multilingual_v2` via direct streaming `fetch` from the Worker. Voice `J17lijyP1BHYcM7ld0Rg` with slow ritualistic settings (`speed 0.85`, `stability 0.6`, `style 0.4`, speaker boost on). The Worker tees the stream — one branch goes to the client `<audio>` element, the other is buffered into a `Uint8Array` and written to R2 (R2.put requires known content length, can't take a chunked stream directly). Frontend uses a plain `<audio src="/api/tts/{id}/{section}">` element; no Web Speech API. The `karakterinOzu` audio prepends the `kapakSözü` so the autoplay's first words are the literary mısra.
 - **Payments:** `PaymentProvider` interface in `src/lib/payment.ts` + `MockPaymentProvider` that always succeeds. The real provider will be **Stripe** (Checkout Session + signed webhook). iyzico is explicitly **not** in scope.
 
 ## Routes
@@ -39,6 +39,7 @@ Strictly the global "Web stack defaults" from `~/.claude/CLAUDE.md`:
 - `POST /api/generate` — calls Claude, inserts a row into D1, returns `{ id, status, freeSection, kapakSozu }`
 - `GET /api/reading/:id` — returns the free preview, plus locked sections only when `reading.unlocked = 1`
 - `POST /api/unlock` — runs the mock payment provider, flips `unlocked` to 1, returns `{ success, transactionId }` (idempotent)
+- `GET /api/tts/:readingId/:section` — returns `audio/mpeg`. `karakterinOzu` always allowed; the 9 locked sections require `reading.unlocked = 1` (403 otherwise). Cache hits stream from R2 (~1s); cache misses synthesize via ElevenLabs (~15–35s for ~2 minutes of audio), tee the response, and write the buffered bytes to R2 in `waitUntil` for next-call hits.
 
 ## CI/CD
 GitHub Actions workflow at `.github/workflows/deploy.yml`:
@@ -62,6 +63,7 @@ Required env vars:
 - `CLOUDFLARE_API_TOKEN` — for `wrangler deploy` and `gh secret set`
 - `GH_TOKEN` — for `gh repo create` and `gh secret set` (active account: `wandernull`)
 - `ANTHROPIC_API_KEY` — passed to the Worker via `wrangler secret put` (prod) or `.dev.vars` (local)
+- `ELEVENLABS_API_KEY` — same handling as Anthropic; Text-to-Speech scope only
 
 Future:
 - `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` once the real payment provider is wired
