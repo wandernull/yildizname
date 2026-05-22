@@ -12,6 +12,13 @@ import type { Env, SectionKey, YildiznameSections } from "./types";
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 
+// Bump this when buildSpeechText() changes in a way that meaningfully alters
+// the audio output (different prosody pre-processing, different prompt
+// shaping, etc). Old objects under earlier prefixes get garbage-collected by
+// the bucket's 15-day lifecycle rule, and the next listener triggers a fresh
+// synthesis under the new prefix.
+const TTS_CACHE_PREFIX = "tts/v2";
+
 const VOICE_SETTINGS = {
   stability: 0.6,
   similarity_boost: 0.75,
@@ -25,12 +32,21 @@ const VOICE_SETTINGS = {
 const HEADERS_TIMEOUT_MS = 30_000;
 
 export function ttsKey(readingId: string, section: SectionKey): string {
-  return `tts/${readingId}/${section}.mp3`;
+  return `${TTS_CACHE_PREFIX}/${readingId}/${section}.mp3`;
 }
 
-// Shape the text for prosody-friendly speech. Em-dashes after sentence
-// terminators give Eleven's model an extra pause beat. The kapakSözü gets
-// prepended only when synthesising karakterinOzu.
+// Shape the text for prosody-friendly speech. Three passes:
+//   1. Optionally prepend kapakSözü (only for karakterinOzu) so the autoplay's
+//      first words are the literary mısra.
+//   2. Strip numerology parentheticals — the müneccim prompt deliberately
+//      invokes ebced math and the model loves to show its work in parens
+//      like "(1+9+8+9=27, 2+7=9)". ElevenLabs reads that as "one plus nine
+//      plus eight…" which breaks the literary cadence. The displayed text
+//      in D1 keeps these breakdowns (they look impressive on screen); only
+//      the audio version drops them. Heuristic: a "+" or "=" inside a paren
+//      flags it as math. Prose parens like "(yani, eski bir kapı)" pass
+//      through untouched.
+//   3. Insert em-dashes after sentence terminators for slower prosody.
 function buildSpeechText(
   section: SectionKey,
   sections: YildiznameSections,
@@ -39,8 +55,12 @@ function buildSpeechText(
   if (section === "karakterinOzu" && sections.kapakSozu) {
     text = `${sections.kapakSozu.trim()}\n\n…\n\n${text}`;
   }
-  // Insert em-dash + space after end-of-sentence punctuation that isn't
-  // already followed by an em-dash. Slows the model's prosody noticeably.
+  // 2: strip math-heavy parentheticals.
+  text = text.replace(/\s*\([^)]*[+=][^)]*\)/g, "");
+  // Collapse the double-spaces and orphaned punctuation that the strip
+  // leaves behind. Preserve newlines (paragraph breaks → natural pauses).
+  text = text.replace(/[ \t]+/g, " ").replace(/[ \t]+([,.!?…])/g, "$1");
+  // 3: em-dash injection for slower prosody.
   return text.replace(/([.!?…])\s+(?=[^—])/g, "$1 — ");
 }
 
