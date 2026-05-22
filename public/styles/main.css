@@ -540,6 +540,38 @@ h4 {
   transition: opacity 0.5s ease;
 }
 
+/* Reassurance footnote — persistent, deliberately muted. Sets the 2-3 min
+   expectation without competing with the phased text. The thin gold hairline
+   above marks it visually as "metadata / footnote" territory. */
+.loading-reassurance {
+  position: relative;
+  font-family: var(--font-display);
+  font-style: italic;
+  color: rgba(184, 196, 212, 0.5);
+  font-size: clamp(0.85rem, 1.8vw, 0.95rem);
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  max-width: 42ch;
+  text-align: center;
+  margin: 1rem 1.25rem 0;
+  padding-top: 1.5rem;
+}
+.loading-reassurance::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(201, 168, 76, 0.45),
+    transparent
+  );
+}
+
 /* ---------- result ---------- */
 
 .view-result {
