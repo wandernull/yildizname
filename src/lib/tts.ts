@@ -102,28 +102,60 @@ export async function synthesizeStream(
     throw new Error(`ElevenLabs ${res.status}`);
   }
 
-  // Tee: one branch goes to the client, the other to R2.
+  // Tee: one branch goes to the client, the other gets buffered and
+  // written to R2. R2.put cannot accept a chunked-encoding stream directly
+  // (it needs a known content length), so we accumulate the bytes from one
+  // branch into a Uint8Array and put that. Both branches drain in parallel
+  // so the client streaming UX is unaffected — buffering only adds a tiny
+  // amount of memory pressure (~2 MB per concurrent reading).
   const [clientBranch, r2Branch] = res.body.tee();
 
-  // R2 put consumes its branch asynchronously while the client reads.
-  // waitUntil keeps the invocation alive long enough for R2 to finish even
-  // if the client finishes reading first. R2 puts on the Cloudflare edge are
-  // fast (<1s for ~300 KB), so this is well within any plan's budget.
   ctx.waitUntil(
-    env.TTS_BUCKET.put(ttsKey(readingId, section), r2Branch, {
-      httpMetadata: {
-        contentType: "audio/mpeg",
-        cacheControl: "public, max-age=1296000, immutable",
-      },
-      customMetadata: {
-        section,
+    bufferAndStore(env, readingId, section, r2Branch).catch((err) => {
+      console.error("[tts] R2 put failed", {
         readingId,
-        synthesizedAt: new Date().toISOString(),
-      },
-    }).catch((err) => {
-      console.error("[tts] R2 put failed", { readingId, section, err: String(err) });
+        section,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }),
   );
 
   return clientBranch;
+}
+
+async function bufferAndStore(
+  env: Env,
+  readingId: string,
+  section: SectionKey,
+  stream: ReadableStream<Uint8Array>,
+): Promise<void> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = stream.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      total += value.length;
+    }
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    bytes.set(c, offset);
+    offset += c.length;
+  }
+  await env.TTS_BUCKET.put(ttsKey(readingId, section), bytes, {
+    httpMetadata: {
+      contentType: "audio/mpeg",
+      cacheControl: "public, max-age=1296000, immutable",
+    },
+    customMetadata: {
+      section,
+      readingId,
+      synthesizedAt: new Date().toISOString(),
+      bytes: String(total),
+    },
+  });
 }
