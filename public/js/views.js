@@ -860,10 +860,10 @@ function makeSection({
 // the button's currentColor.
 const LOCK_GLYPH_HTML = `<span class="lock-glyph" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6 V4 a3 3 0 0 1 6 0 v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="2" y="6" width="8" height="7" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="9.5" r="0.7" fill="currentColor"/></svg></span>`;
 
-// Apply the locked visual state (disabled, lock glyph, tooltip, visible
-// "Tam okumayla açılır" note) to a `.post-actions` element. Idempotent:
-// safe to call once on a freshly-built node and again on the template's
-// own copy.
+// Apply the locked visual state (disabled buttons + lock glyph + native
+// hover tooltip) to a `.post-actions` element. The lock SVG inside each
+// button is signal enough on its own; the previous "Tam okumayla açılır"
+// caption was felt to be over-explaining.
 function applyLockedActionsState(postActionsEl) {
   const buttons = postActionsEl.querySelectorAll(
     ".action-listen-all, .action-print",
@@ -876,8 +876,6 @@ function applyLockedActionsState(postActionsEl) {
     }
     btn.title = "Tam okumayla açılır";
   }
-  const note = postActionsEl.querySelector(".post-actions-lock-note");
-  if (note) note.hidden = false;
 }
 
 // Build a fresh post-actions DOM node in the locked state. Same structure
@@ -901,12 +899,7 @@ function makeLockedActionsBlock() {
   printer.textContent = "PDF İndir";
 
   row.append(listen, printer);
-
-  const note = document.createElement("p");
-  note.className = "post-actions-lock-note";
-  note.textContent = "Tam okumayla açılır";
-
-  wrap.append(row, note);
+  wrap.append(row);
   applyLockedActionsState(wrap);
   return wrap;
 }
@@ -1052,19 +1045,17 @@ export function renderResult(router, { id, unlockedQuery }) {
       }
 
       // The post-action buttons are visible at the bottom of the result
-      // page even before unlock — disabled, with a lock glyph inside each
-      // and a small "Tam okumayla açılır" hint below. After unlock they
-      // light up and become functional. The same locked-state block
-      // (built fresh by makeLockedActionsBlock above) is also inserted at
-      // the top of the locked area so both placements mirror exactly.
+      // page even before unlock — disabled with a lock glyph inside each.
+      // After unlock they light up and become functional. The same
+      // locked-state block (built fresh by makeLockedActionsBlock above)
+      // is also inserted at the top of the locked area so both placements
+      // mirror exactly.
       const listenBtn = postActions.querySelector(".action-listen-all");
       const printBtn = postActions.querySelector(".action-print");
-      const lockNote = postActions.querySelector(".post-actions-lock-note");
 
       if (!isUnlocked) {
         applyLockedActionsState(postActions);
       } else {
-        lockNote.hidden = true;
 
         // Sequential playback through all 11 sections using the single
         // chainAudio element. Cache hits make this near-seamless; cache

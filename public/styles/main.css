@@ -296,6 +296,75 @@ h4 {
   letter-spacing: 0.08em;
 }
 
+/* Landing-page "Yıldızname hakkında oku" block — surfaces the SEO content
+   pages to non-converting visitors without competing with the primary CTA. */
+.landing-related {
+  margin-top: 4rem;
+  padding-top: 2.5rem;
+  border-top: 1px solid rgba(201, 168, 76, 0.18);
+  text-align: center;
+  width: 100%;
+  max-width: 540px;
+}
+.landing-related-label {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: rgba(184, 196, 212, 0.6);
+  font-size: 0.95rem;
+  margin: 0 0 1.1rem;
+  letter-spacing: 0.04em;
+}
+.landing-related ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.75rem;
+}
+.landing-related li {
+  margin: 0;
+}
+.landing-related a {
+  font-family: var(--font-display);
+  color: var(--gold);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(201, 168, 76, 0.3);
+  padding-bottom: 2px;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  transition: color 0.3s ease, border-color 0.3s ease;
+}
+.landing-related a:hover {
+  color: var(--gold-light);
+  border-color: var(--gold-light);
+}
+
+/* "Yeni bir okuma" footer on /okuma/:id — non-tech users get a clear way
+   to start another reading without copy-pasting URLs. */
+.result-new-reading {
+  margin-top: 3.5rem;
+  padding-top: 2.25rem;
+  border-top: 1px solid rgba(201, 168, 76, 0.18);
+  text-align: center;
+}
+.new-reading-link {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--gold);
+  font-size: 1.05rem;
+  text-decoration: none;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(201, 168, 76, 0.3);
+  padding-bottom: 3px;
+  transition: color 0.3s ease, border-color 0.3s ease;
+}
+.new-reading-link:hover {
+  color: var(--gold-light);
+  border-color: var(--gold-light);
+}
+
 /* ---------- form ---------- */
 
 .view-form {
