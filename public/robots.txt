@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /okuma/
+
+Sitemap: https://yildizna.me/sitemap.xml
