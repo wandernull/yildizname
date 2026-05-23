@@ -163,8 +163,13 @@ function tpl(id) {
 // Landing
 // ----------------------------------------------------------------------------
 
-export function renderLanding() {
-  return tpl("tpl-landing");
+export function renderLanding(router) {
+  const root = tpl("tpl-landing");
+  const cta = root.querySelector(".cta-start-journey");
+  if (cta) {
+    cta.addEventListener("click", () => router.setStep("form"));
+  }
+  return root;
 }
 
 // ----------------------------------------------------------------------------
@@ -329,7 +334,10 @@ export function renderForm(router) {
   let step = 0;
 
   const refreshNav = () => {
-    navBack.disabled = step === 0;
+    // Step 0's "back" now goes to landing (a real in-app destination),
+    // so the button is never disabled — just the label changes.
+    navBack.disabled = false;
+    navBack.textContent = step === 0 ? "← Ana sayfa" : "← Geri";
     navSkip.hidden = !(step === 4 || step === 5);
     navNext.disabled = !isValidStep(step, data);
     navNext.textContent =
@@ -351,6 +359,8 @@ export function renderForm(router) {
     if (step > 0) {
       step -= 1;
       mountStep();
+    } else {
+      router.setStep("landing");
     }
   });
 
@@ -381,7 +391,8 @@ export function renderForm(router) {
     } catch {
       /* ignore — loading view will surface */
     }
-    router.navigate("/loading");
+    // Sub-view switch — URL bar stays at "/" while the müneccim works.
+    router.setStep("loading");
   };
 
   navNext.addEventListener("click", next);
@@ -585,7 +596,7 @@ export function renderLoading(router) {
     btn.style.marginTop = "2rem";
     btn.textContent = "Tekrar dene";
     btn.addEventListener("click", () =>
-      router.navigate("/form", { replace: true }),
+      router.setStep("form"),
     );
     root.appendChild(btn);
   };
@@ -599,7 +610,7 @@ export function renderLoading(router) {
       /* ignore */
     }
     if (!form) {
-      router.navigate("/form", { replace: true });
+      router.setStep("form");
       return;
     }
     const startedAt = Date.now();
@@ -619,7 +630,7 @@ export function renderLoading(router) {
         } catch {
           /* ignore */
         }
-        router.navigate(`/result/${encodeURIComponent(data.id)}`, {
+        router.navigate(`/okuma/${encodeURIComponent(data.id)}`, {
           replace: true,
         });
       }, wait);
@@ -919,7 +930,7 @@ function makePaymentBlock(id, router) {
     try {
       const res = await api.unlockReading(id);
       if (!res.success) throw new Error(res.error ?? "Ödeme başarısız.");
-      router.navigate(`/result/${encodeURIComponent(id)}?unlocked=true`, { replace: true });
+      router.navigate(`/okuma/${encodeURIComponent(id)}?unlocked=true`, { replace: true });
     } catch (e) {
       err.textContent = e.message || "Bilinmeyen hata.";
       err.hidden = false;
