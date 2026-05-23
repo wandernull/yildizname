@@ -808,6 +808,7 @@ function makeSection({
   sectionKey,
   autoplay,
   manuallyStopped,
+  counter,
 }) {
   const section = document.createElement("section");
   section.className = "section" + (locked ? " locked" : "");
@@ -815,6 +816,17 @@ function makeSection({
   const h3 = document.createElement("h3");
   h3.textContent = title;
   section.appendChild(h3);
+
+  // Optional caption directly under the title — used on karakterinOzu in
+  // the free-preview state to tell the user "this is just the first
+  // section, nine more are locked". Sits tight under h3, doesn't get its
+  // own section break.
+  if (counter) {
+    const counterEl = document.createElement("p");
+    counterEl.className = "section-counter";
+    counterEl.textContent = counter;
+    section.appendChild(counterEl);
+  }
 
   const body = document.createElement("div");
   body.className = "section-body";
@@ -1012,33 +1024,25 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   const modalError = root.querySelector(".unlock-modal-error");
   if (!sticky || !modal || !modalCta) return;
 
-  // Visibility logic: show sticky once the user has scrolled past the
-  // free karakterinOzu section; hide once the bottom inline payment
-  // block is in the viewport (so the sticky and the in-flow CTA don't
-  // stack visually).
-  const firstSection = sectionsHost.querySelector(".section");
-  // The bottom payment block is the SECOND .payment-block (top is appended
-  // first; bottom appended after the locked sections loop).
+  // Visibility logic: sticky fades in 1.5s after the view mounts (just
+  // enough delay so the autoplay starts cleanly without the sticky
+  // sliding in over it), then stays visible until the bottom inline
+  // payment block scrolls into the viewport. The previous version waited
+  // for karakterinOzu to scroll out — too late, by then the user had
+  // already finished the free section without seeing the unlock signal.
   const paymentBlocks = sectionsHost.querySelectorAll(".payment-block");
   const bottomPayment = paymentBlocks[paymentBlocks.length - 1] ?? null;
 
-  let pastTop = false;
+  let mountedShown = false;
   let bottomVisible = false;
   const refresh = () => {
-    sticky.classList.toggle("is-visible", pastTop && !bottomVisible);
+    sticky.classList.toggle("is-visible", mountedShown && !bottomVisible);
   };
 
-  const topObs = new IntersectionObserver(
-    (entries) => {
-      const e = entries[0];
-      // "past" the karakterinOzu = its bottom edge is above the viewport
-      // top (i.e. it's fully scrolled out at the top).
-      pastTop = !e.isIntersecting && e.boundingClientRect.bottom < 0;
-      refresh();
-    },
-    { threshold: 0 },
-  );
-  if (firstSection) topObs.observe(firstSection);
+  const showDelay = window.setTimeout(() => {
+    mountedShown = true;
+    refresh();
+  }, 1500);
 
   const bottomObs = new IntersectionObserver(
     (entries) => {
@@ -1050,7 +1054,7 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   if (bottomPayment) bottomObs.observe(bottomPayment);
 
   disposables.push(() => {
-    topObs.disconnect();
+    window.clearTimeout(showDelay);
     bottomObs.disconnect();
   });
 
@@ -1170,9 +1174,25 @@ export function renderResult(router, { id, unlockedQuery }) {
         sectionKey: "karakterinOzu",
         autoplay: journeyAutoplay && !userStoppedOnce,
         manuallyStopped: markStopped,
+        // Counter only on the free-preview state — once unlocked the user
+        // already has the full reading and the count is just noise.
+        counter: isUnlocked
+          ? null
+          : "Yıldıznamenin ilk bölümü — dokuz mührü kapalı",
       });
       sectionsHost.appendChild(freeSection.node);
       disposables.push(freeSection.dispose);
+
+      // Inline scroll-hint pill right after karakterinOzu, before the
+      // ornament — catches the user at the natural "I just finished
+      // reading" moment and points to what's below. Same locked-only
+      // condition as the counter above.
+      if (!isUnlocked) {
+        const hint = document.createElement("p");
+        hint.className = "section-scroll-hint";
+        hint.textContent = "↓ Dokuz bölüm daha kilitli — mührünü kırınca açılır";
+        sectionsHost.appendChild(hint);
+      }
 
       const orn = document.createElement("div");
       orn.className = "ornament";

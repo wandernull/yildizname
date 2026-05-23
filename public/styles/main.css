@@ -810,6 +810,35 @@ h4 {
   margin-bottom: 1.25rem;
   letter-spacing: 0.04em;
 }
+
+/* Caption right under a section's h3 — used on karakterinOzu in the
+   free-preview state to make the "this is just the first section"
+   framing immediate. Negative top margin pulls it tight under the
+   title; the title's margin-bottom would otherwise create too much
+   gap. */
+.section-counter {
+  margin: -0.85rem 0 1.25rem;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: rgba(184, 196, 212, 0.6);
+  letter-spacing: 0.02em;
+}
+
+/* Inline scroll-hint pill that sits between karakterinOzu and the
+   ornament; points the user at the locked sections below at the
+   natural "just finished reading" moment. Centred, italic, gold-muted
+   so it reads as a guide rather than a sales line. */
+.section-scroll-hint {
+  text-align: center;
+  font-family: var(--font-display);
+  font-style: italic;
+  color: rgba(201, 168, 76, 0.75);
+  font-size: 1rem;
+  letter-spacing: 0.025em;
+  margin: 1.25rem 1rem 0;
+  line-height: 1.5;
+}
 .section-body {
   color: var(--silver);
   line-height: 1.95;
