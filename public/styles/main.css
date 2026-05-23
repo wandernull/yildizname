@@ -824,6 +824,11 @@ h4 {
 }
 .post-actions {
   margin-top: 3rem;
+  /* Breathing room before whatever comes next. Needed for the TOP locked
+     occurrence (followed by .section.locked) — without this they touch
+     because .section has no margin-top. The BOTTOM occurrence is unaffected:
+     margin-collapses with .result-new-reading's 3.5rem margin-top. */
+  margin-bottom: 1.5rem;
   display: grid;
   justify-items: center;
   gap: 0.75rem;
