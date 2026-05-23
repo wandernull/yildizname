@@ -140,7 +140,7 @@ app.post("/api/unlock", async (c) => {
   const provider = defaultPaymentProvider();
   const result = await provider.charge({
     readingId: id,
-    amount: Number(c.env.READING_PRICE_TRY ?? "250") * 100,
+    amount: Math.round(Number(c.env.READING_PRICE_TRY ?? "349.99") * 100),
     currency: "TRY",
   });
   if (!result.success) {

@@ -958,32 +958,131 @@ async function handleShare(btn) {
   }
 }
 
+// Price string is hardcoded in two display sites (inline payment button +
+// unlock modal). The wrangler.toml value (READING_PRICE_TRY) is used by
+// the server for the actual charge amount; if you change one, change both.
+const PRICE_LABEL = "349,99 ₺";
+const INLINE_PAYMENT_LABEL = `Kaderinin tamamını aç — ${PRICE_LABEL}`;
+
+// Shared unlock flow. Used by makePaymentBlock (inline gold-fill buttons)
+// AND the sticky-CTA reveal modal. Toggles loading/error state on the
+// passed button + optional error element; navigates to ?unlocked=true on
+// success.
+async function performUnlock(id, router, btn, errEl, restoreLabel) {
+  btn.disabled = true;
+  btn.textContent = "Kapı aralanıyor…";
+  if (errEl) errEl.hidden = true;
+  try {
+    const res = await api.unlockReading(id);
+    if (!res.success) throw new Error(res.error ?? "Ödeme başarısız.");
+    router.navigate(
+      `/okuma/${encodeURIComponent(id)}?unlocked=true`,
+      { replace: true },
+    );
+  } catch (e) {
+    if (errEl) {
+      errEl.textContent = e.message || "Bilinmeyen hata.";
+      errEl.hidden = false;
+    }
+    btn.disabled = false;
+    btn.textContent = restoreLabel;
+  }
+}
+
+// Wires the sticky-bottom-CTA and reveal-modal that live in the result
+// template. Only called when !isUnlocked. Manages visibility via two
+// IntersectionObservers (sticky shows when karakterinOzu leaves viewport
+// top, hides when the bottom payment block enters viewport) and routes
+// modal-CTA clicks through the same performUnlock helper as the inline
+// payment buttons.
+function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
+  const sticky = root.querySelector(".sticky-cta");
+  const stickyTrigger = root.querySelector(".sticky-cta-trigger");
+  const modal = root.querySelector(".unlock-modal");
+  const modalCta = root.querySelector(".unlock-modal-cta");
+  const modalClose = root.querySelector(".unlock-modal-close");
+  const modalError = root.querySelector(".unlock-modal-error");
+  if (!sticky || !modal || !modalCta) return;
+
+  // Visibility logic: show sticky once the user has scrolled past the
+  // free karakterinOzu section; hide once the bottom inline payment
+  // block is in the viewport (so the sticky and the in-flow CTA don't
+  // stack visually).
+  const firstSection = sectionsHost.querySelector(".section");
+  // The bottom payment block is the SECOND .payment-block (top is appended
+  // first; bottom appended after the locked sections loop).
+  const paymentBlocks = sectionsHost.querySelectorAll(".payment-block");
+  const bottomPayment = paymentBlocks[paymentBlocks.length - 1] ?? null;
+
+  let pastTop = false;
+  let bottomVisible = false;
+  const refresh = () => {
+    sticky.classList.toggle("is-visible", pastTop && !bottomVisible);
+  };
+
+  const topObs = new IntersectionObserver(
+    (entries) => {
+      const e = entries[0];
+      // "past" the karakterinOzu = its bottom edge is above the viewport
+      // top (i.e. it's fully scrolled out at the top).
+      pastTop = !e.isIntersecting && e.boundingClientRect.bottom < 0;
+      refresh();
+    },
+    { threshold: 0 },
+  );
+  if (firstSection) topObs.observe(firstSection);
+
+  const bottomObs = new IntersectionObserver(
+    (entries) => {
+      bottomVisible = entries[0].isIntersecting;
+      refresh();
+    },
+    { rootMargin: "0px 0px -80px 0px" },
+  );
+  if (bottomPayment) bottomObs.observe(bottomPayment);
+
+  disposables.push(() => {
+    topObs.disconnect();
+    bottomObs.disconnect();
+  });
+
+  // Modal open/close.
+  stickyTrigger.addEventListener("click", () => {
+    modalError.hidden = true;
+    modal.showModal();
+  });
+  modalClose.addEventListener("click", () => modal.close());
+  modal.addEventListener("click", (ev) => {
+    // Clicking the backdrop (the <dialog> itself, not its inner content)
+    // closes the modal — native <dialog> doesn't do this out of the box.
+    if (ev.target === modal) modal.close();
+  });
+
+  // Modal CTA → same unlock flow as the inline buttons.
+  const MODAL_CTA_LABEL = "Kaderinin tamamını aç →";
+  modalCta.addEventListener("click", () => {
+    performUnlock(id, router, modalCta, modalError, MODAL_CTA_LABEL);
+  });
+
+  disposables.push(() => {
+    if (modal.open) modal.close();
+  });
+}
+
 function makePaymentBlock(id, router) {
   const wrap = document.createElement("div");
   wrap.className = "payment-block";
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "btn-gold-fill";
-  btn.textContent = "Kaderinin tamamını aç — 250 ₺";
+  btn.textContent = INLINE_PAYMENT_LABEL;
   const err = document.createElement("p");
   err.className = "payment-error";
   err.hidden = true;
   wrap.append(btn, err);
 
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.textContent = "Kapı aralanıyor…";
-    err.hidden = true;
-    try {
-      const res = await api.unlockReading(id);
-      if (!res.success) throw new Error(res.error ?? "Ödeme başarısız.");
-      router.navigate(`/okuma/${encodeURIComponent(id)}?unlocked=true`, { replace: true });
-    } catch (e) {
-      err.textContent = e.message || "Bilinmeyen hata.";
-      err.hidden = false;
-      btn.disabled = false;
-      btn.textContent = "Kaderinin tamamını aç — 250 ₺";
-    }
+  btn.addEventListener("click", () => {
+    performUnlock(id, router, btn, err, INLINE_PAYMENT_LABEL);
   });
 
   return wrap;
@@ -1165,6 +1264,14 @@ export function renderResult(router, { id, unlockedQuery }) {
       // for the recipient.
       for (const btn of root.querySelectorAll(".action-share")) {
         btn.addEventListener("click", () => handleShare(btn));
+      }
+
+      // Sticky CTA + reveal modal. Only when not unlocked. The sticky is
+      // mobile-only via CSS @media; the JS just manages visibility based
+      // on scroll position (show after karakterinOzu scrolls out, hide
+      // when the bottom payment block scrolls in).
+      if (!isUnlocked) {
+        wireStickyAndModal({ root, id, router, sectionsHost, disposables });
       }
     } catch (err) {
       sectionsHost.replaceChildren();

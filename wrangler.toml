@@ -41,7 +41,12 @@ migrations_dir = "migrations"
 # ELEVENLABS_API_KEY, later STRIPE_SECRET_KEY) are set via `wrangler secret
 # put` for production, and via `.dev.vars` for local dev.
 [vars]
-READING_PRICE_TRY = "250"
+# Single-tier price for the full reading (text + audio bundled). Dot-decimal
+# for Number() parsing on the server; UI strings render this as "349,99 ₺"
+# with the Turkish comma convention. If you change this value, also update
+# the literal "349,99 ₺" in public/js/views.js (makePaymentBlock label +
+# the unlock modal price element) and public/sss.html.
+READING_PRICE_TRY = "349.99"
 # Stock ElevenLabs voice — deep male, decent Turkish. Swap by changing this
 # constant; nothing else needs to move. Will be replaced with a cloned
 # müneccim voice in Phase 2 once paying customers validate the bet.

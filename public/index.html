@@ -151,6 +151,36 @@
         <nav class="result-new-reading" aria-label="Yeni okuma">
           <a href="/" data-link class="new-reading-link">Yeni bir okuma →</a>
         </nav>
+
+        <!-- Mobile-only sticky CTA. Hidden on desktop via CSS; hidden on
+             mobile until the user scrolls past karakterinOzu; hides again
+             when the bottom payment block scrolls into view. Tap opens
+             the unlock-modal — price is deliberately not on the bar so it
+             doesn't break motivation while scrolling. -->
+        <div class="sticky-cta" aria-hidden="true">
+          <button type="button" class="sticky-cta-trigger">Devamını oku →</button>
+        </div>
+
+        <!-- Reveal modal: opened by the sticky CTA tap. Native <dialog>
+             so we get backdrop, focus trap, and ESC-to-close for free. -->
+        <dialog class="unlock-modal" aria-labelledby="unlock-modal-title">
+          <div class="unlock-modal-content">
+            <button
+              type="button"
+              class="unlock-modal-close"
+              aria-label="Kapat"
+            >×</button>
+            <h2 id="unlock-modal-title" class="unlock-modal-title">Mührü kır</h2>
+            <p class="unlock-modal-body">
+              Yıldıznamenin geri kalan dokuz bölümü ve müneccim sesiyle baştan sona sesli okuma — hepsi senin için.
+            </p>
+            <p class="unlock-modal-price">349,99 ₺</p>
+            <button type="button" class="btn-gold-fill unlock-modal-cta">
+              Kaderinin tamamını aç →
+            </button>
+            <p class="unlock-modal-error" hidden></p>
+          </div>
+        </dialog>
       </article>
     </template>
 

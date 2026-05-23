@@ -341,6 +341,134 @@ h4 {
   border-color: var(--gold-light);
 }
 
+/* Sticky bottom CTA — mobile-only, gives non-tech users a persistent
+   discovery path to the unlock without breaking the mystical aesthetic.
+   Deliberately doesn't show the price (the modal does that on tap). */
+.sticky-cta {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  padding: 0.85rem 1rem;
+  padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+  background: linear-gradient(
+    180deg,
+    rgba(10, 14, 26, 0.55) 0%,
+    var(--deep) 70%
+  );
+  border-top: 1px solid rgba(201, 168, 76, 0.32);
+  text-align: center;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.sticky-cta.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.sticky-cta-trigger {
+  background: transparent;
+  border: none;
+  color: var(--gold-light);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.15rem;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: 0.4rem 1rem;
+  transition: color 0.3s ease;
+}
+.sticky-cta-trigger:hover,
+.sticky-cta-trigger:active {
+  color: var(--gold);
+}
+@media (min-width: 641px) {
+  .sticky-cta {
+    display: none !important;
+  }
+}
+
+/* Unlock-reveal modal — opened from the sticky CTA tap. Native <dialog>
+   so we get backdrop + focus trap + ESC-to-close out of the box. */
+.unlock-modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: auto;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  color: var(--silver);
+}
+.unlock-modal::backdrop {
+  background: rgba(6, 9, 16, 0.86);
+  backdrop-filter: blur(2px);
+}
+.unlock-modal-content {
+  background: var(--deep);
+  border: 1px solid rgba(201, 168, 76, 0.35);
+  border-radius: 4px;
+  padding: 2.5rem 1.75rem 2.25rem;
+  width: min(380px, calc(100vw - 2.5rem));
+  text-align: center;
+  position: relative;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.unlock-modal-close {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.6rem;
+  background: transparent;
+  border: none;
+  color: rgba(184, 196, 212, 0.55);
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  transition: color 0.3s ease;
+}
+.unlock-modal-close:hover {
+  color: var(--gold-light);
+}
+.unlock-modal-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.6rem, 5vw, 2rem);
+  color: var(--gold-light);
+  margin: 0 0 1.25rem;
+  letter-spacing: 0.015em;
+}
+.unlock-modal-body {
+  font-family: var(--font-body);
+  color: var(--silver);
+  line-height: 1.7;
+  font-size: 1.05rem;
+  margin: 0 0 1.5rem;
+}
+.unlock-modal-price {
+  font-family: var(--font-display);
+  color: var(--gold-light);
+  font-size: clamp(1.85rem, 5.5vw, 2.2rem);
+  font-weight: 600;
+  margin: 0 0 1.75rem;
+  letter-spacing: 0.01em;
+}
+.unlock-modal-cta {
+  /* uses .btn-gold-fill — no extra rules needed */
+}
+.unlock-modal-error {
+  margin: 1rem 0 0;
+  color: #d97a7a;
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
 /* "Yeni bir okuma" footer on /okuma/:id — non-tech users get a clear way
    to start another reading without copy-pasting URLs. */
 .result-new-reading {
