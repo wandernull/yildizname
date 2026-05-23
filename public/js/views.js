@@ -914,8 +914,13 @@ function makeLockedActionsBlock() {
   return wrap;
 }
 
-// Native share sheet on mobile (iOS/Android), clipboard fallback on desktop.
-// Always available — independent of payment state.
+// Native share sheet on touch-primary devices (mobile), clipboard copy on
+// everything else. Why not navigator.share everywhere it exists? — macOS
+// Safari ships navigator.share but its share sheet has no "Copy" option
+// (Apple's deliberate choice, ~5y-old complaint, unlikely to change). On
+// desktop the user almost certainly wants Copy as the primary action, so we
+// skip the native sheet there. matchMedia('(hover: none) and (pointer:
+// coarse)') is the standard CSS-level "this is a touch device" probe.
 async function handleShare(btn) {
   const url = window.location.href;
   const shareData = {
@@ -923,12 +928,18 @@ async function handleShare(btn) {
     title: "Yıldızname",
     text: "Müneccim yıldıznamemi okudu.",
   };
+  const isTouchPrimary = window.matchMedia(
+    "(hover: none) and (pointer: coarse)",
+  ).matches;
+
   try {
-    if (navigator.share) {
+    if (isTouchPrimary && navigator.share) {
+      // Mobile: native share sheet (iOS Safari includes Copy here;
+      // Android's share sheet is rich with messaging apps).
       await navigator.share(shareData);
-      // Native share sheet handles its own confirmation UX — no in-app
-      // feedback needed.
+      // Native UI handles its own confirmation — no in-app feedback needed.
     } else if (navigator.clipboard?.writeText) {
+      // Desktop (incl. macOS Safari): copy + visible confirmation.
       await navigator.clipboard.writeText(url);
       const original = btn.textContent;
       btn.textContent = "Kopyalandı ✓";
