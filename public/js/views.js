@@ -898,10 +898,53 @@ function makeLockedActionsBlock() {
   printer.className = "btn-gold-outline action-print";
   printer.textContent = "PDF İndir";
 
-  row.append(listen, printer);
+  // Share button — always enabled, even on the locked preview. Sharing the
+  // free preview to a friend drives organic conversion; the recipient sees
+  // the same karakterinOzu and the same unlock CTA.
+  const share = document.createElement("button");
+  share.type = "button";
+  share.className = "btn-gold-outline action-share";
+  share.textContent = "Paylaş";
+
+  row.append(listen, printer, share);
   wrap.append(row);
+  // applyLockedActionsState only targets .action-listen-all + .action-print,
+  // so .action-share is left active.
   applyLockedActionsState(wrap);
   return wrap;
+}
+
+// Native share sheet on mobile (iOS/Android), clipboard fallback on desktop.
+// Always available — independent of payment state.
+async function handleShare(btn) {
+  const url = window.location.href;
+  const shareData = {
+    url,
+    title: "Yıldızname",
+    text: "Müneccim yıldıznamemi okudu.",
+  };
+  try {
+    if (navigator.share) {
+      await navigator.share(shareData);
+      // Native share sheet handles its own confirmation UX — no in-app
+      // feedback needed.
+    } else if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+      const original = btn.textContent;
+      btn.textContent = "Kopyalandı ✓";
+      btn.disabled = true;
+      window.setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 2000);
+    } else {
+      // Last-resort fallback for very old browsers.
+      window.prompt("Bağlantıyı kopyala:", url);
+    }
+  } catch {
+    // User dismissed the share sheet, or clipboard threw — silent no-op
+    // (button stays as-is, ready to be clicked again).
+  }
 }
 
 function makePaymentBlock(id, router) {
@@ -1060,6 +1103,7 @@ export function renderResult(router, { id, unlockedQuery }) {
         // Sequential playback through all 11 sections using the single
         // chainAudio element. Cache hits make this near-seamless; cache
         // misses incur a per-section synthesis delay.
+        // (handled below, after share-button wiring)
         const queue = ["karakterinOzu", ...LOCKED_SECTION_KEYS];
         let queueIdx = 0;
         let chainActive = false;
@@ -1102,6 +1146,14 @@ export function renderResult(router, { id, unlockedQuery }) {
         });
 
         printBtn.addEventListener("click", () => window.print());
+      }
+
+      // Wire every share button on the page (both the JS-built top
+      // locked-actions block and the template's bottom one). Share works
+      // regardless of unlock state — the locked preview is itself a hook
+      // for the recipient.
+      for (const btn of root.querySelectorAll(".action-share")) {
+        btn.addEventListener("click", () => handleShare(btn));
       }
     } catch (err) {
       sectionsHost.replaceChildren();
