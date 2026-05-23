@@ -1,0 +1,223 @@
+/* Content-page typography & layout.
+   Used by /yildizname, /ebced, /muneccim, /menzil, /sss.
+   The shared starfield + moon + colour tokens come from main.css. */
+
+.content-nav {
+  position: relative;
+  z-index: 3;
+  padding: 1.75rem 1.5rem 0.5rem;
+  text-align: center;
+}
+.content-nav .brand-link {
+  font-family: var(--font-display);
+  color: var(--gold);
+  letter-spacing: 0.35em;
+  font-size: 0.85rem;
+  text-transform: lowercase;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+.content-nav .brand-link:hover {
+  color: var(--gold-light);
+}
+
+.content-article {
+  position: relative;
+  z-index: 2;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 5rem;
+}
+
+.content-header {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+.content-header h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(2rem, 5.5vw, 3.2rem);
+  line-height: 1.15;
+  color: var(--gold-light);
+  margin: 0 0 0.75rem;
+  letter-spacing: 0.01em;
+}
+.content-header .subtitle {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--silver);
+  font-size: clamp(1rem, 2.3vw, 1.2rem);
+  opacity: 0.85;
+  margin: 0;
+}
+
+.content-article section {
+  margin: 2.5rem 0;
+}
+.content-article h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(1.4rem, 3.5vw, 1.85rem);
+  color: var(--gold-light);
+  margin: 0 0 1.25rem;
+  letter-spacing: 0.015em;
+  line-height: 1.25;
+}
+.content-article h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(1.15rem, 2.6vw, 1.35rem);
+  color: var(--gold-light);
+  margin: 1.75rem 0 0.75rem;
+  letter-spacing: 0.01em;
+}
+.content-article p {
+  font-family: var(--font-body);
+  color: var(--silver);
+  font-size: 1.05rem;
+  line-height: 1.85;
+  margin: 0 0 1.1rem;
+}
+.content-article em,
+.content-article i {
+  color: var(--gold-light);
+  font-style: italic;
+}
+.content-article strong {
+  color: var(--gold-light);
+  font-weight: 600;
+}
+.content-article a {
+  color: var(--gold);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(201, 168, 76, 0.45);
+  transition: color 0.3s ease, text-decoration-color 0.3s ease;
+}
+.content-article a:hover {
+  color: var(--gold-light);
+  text-decoration-color: var(--gold-light);
+}
+.content-article ul,
+.content-article ol {
+  color: var(--silver);
+  font-family: var(--font-body);
+  font-size: 1.05rem;
+  line-height: 1.85;
+  padding-left: 1.5rem;
+  margin: 0 0 1.25rem;
+}
+.content-article li {
+  margin-bottom: 0.45rem;
+}
+.content-article blockquote {
+  border-left: 2px solid rgba(201, 168, 76, 0.45);
+  padding: 0.25rem 0 0.25rem 1.25rem;
+  margin: 1.5rem 0;
+  color: var(--gold-light);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.15rem;
+  line-height: 1.7;
+}
+.content-article blockquote cite {
+  display: block;
+  font-style: normal;
+  font-size: 0.85rem;
+  color: rgba(184, 196, 212, 0.5);
+  margin-top: 0.5rem;
+  letter-spacing: 0.04em;
+}
+
+/* Tabular content (e.g. ebced letter-value table, menzil list) */
+.content-article table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-family: var(--font-body);
+  color: var(--silver);
+  font-size: 0.95rem;
+}
+.content-article th,
+.content-article td {
+  text-align: left;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid rgba(201, 168, 76, 0.18);
+}
+.content-article th {
+  color: var(--gold-light);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+}
+
+/* Section separator ornament */
+.content-article .section-sep {
+  text-align: center;
+  color: var(--gold);
+  font-size: 1.25rem;
+  letter-spacing: 0.5em;
+  padding-left: 0.5em;
+  margin: 3rem 0;
+  opacity: 0.6;
+}
+
+/* CTA block at the bottom of every content page */
+.content-cta {
+  margin: 4rem 0 0;
+  text-align: center;
+  padding: 2rem 0;
+}
+.content-cta .cta-prompt {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--gold-light);
+  font-size: clamp(1.15rem, 2.6vw, 1.4rem);
+  margin: 0 0 1.5rem;
+}
+.content-cta .btn-gold-outline {
+  text-decoration: none;
+}
+
+/* Related readings — small linked list at the very bottom */
+.content-related {
+  margin: 3rem 0 0;
+  padding-top: 2rem;
+  border-top: 1px solid rgba(201, 168, 76, 0.18);
+  text-align: center;
+}
+.content-related-label {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: rgba(184, 196, 212, 0.55);
+  font-size: 0.95rem;
+  margin: 0 0 0.85rem;
+  letter-spacing: 0.04em;
+}
+.content-related ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+}
+.content-related li {
+  margin: 0;
+}
+.content-related a {
+  text-decoration: none;
+  border-bottom: 1px solid rgba(201, 168, 76, 0.3);
+  padding-bottom: 2px;
+}
+
+/* Q&A styling for /sss */
+.qa {
+  margin: 0 0 2rem;
+}
+.qa h2 {
+  margin-bottom: 0.75rem !important;
+  font-size: clamp(1.15rem, 2.6vw, 1.35rem) !important;
+}

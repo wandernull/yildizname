@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <title>Müneccim: Osmanlı Sarayında Yıldız Okuyan Bilge — yıldızna.me</title>
+    <meta
+      name="description"
+      content="Müneccim, Osmanlı'da yıldızları okuyan, takvim hazırlayan, yıldızname yazan bilim adamıydı. Saray müneccimliği, Müneccimbaşı makamı ve tanınmış isimler."
+    />
+    <link rel="canonical" href="https://yildizna.me/muneccim" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Müneccim" />
+    <meta property="og:description" content="Osmanlı Sarayında Yıldız Okuyan Bilge." />
+    <meta property="og:url" content="https://yildizna.me/muneccim" />
+    <meta property="og:locale" content="tr_TR" />
+    <meta property="og:site_name" content="yıldızna.me" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Müneccim" />
+    <meta name="twitter:description" content="Osmanlı Sarayında Yıldız Okuyan Bilge." />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": "Müneccim: Osmanlı Sarayında Yıldız Okuyan Bilge",
+        "description": "Saray müneccimliğinin tarihi, Müneccimbaşı makamı ve tanınmış müneccimler.",
+        "inLanguage": "tr",
+        "author": { "@type": "Organization", "name": "yıldızna.me" },
+        "publisher": { "@type": "Organization", "name": "yıldızna.me" }
+      }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Noto+Serif:wght@400;600&display=swap"
+    />
+    <link rel="stylesheet" href="/styles/main.css" />
+    <link rel="stylesheet" href="/styles/content.css" />
+  </head>
+  <body>
+    <canvas id="starfield" aria-hidden="true"></canvas>
+    <div id="moon" aria-hidden="true">
+      <svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fff5d6" stop-opacity="0.4" />
+            <stop offset="60%" stop-color="#c9a84c" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="#c9a84c" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="moonBody" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#eef0f3" />
+            <stop offset="100%" stop-color="#bdc3cb" />
+          </linearGradient>
+        </defs>
+        <circle cx="60" cy="60" r="55" fill="url(#moonGlow)" />
+        <path d="M 70 18 A 42 42 0 1 0 70 102 A 32 32 0 1 1 70 18 Z" fill="url(#moonBody)" opacity="0.92" />
+      </svg>
+    </div>
+    <div id="shooting-star-host" aria-hidden="true"></div>
+
+    <header class="content-nav">
+      <a href="/" class="brand-link">yıldızna.me</a>
+    </header>
+
+    <article class="content-article">
+      <header class="content-header">
+        <h1>Müneccim</h1>
+        <p class="subtitle">Osmanlı Sarayında Yıldız Okuyan Bilge</p>
+        <hr class="gold-rule" />
+      </header>
+
+      <section>
+        <p>
+          <strong>Müneccim</strong>, Osmanlı geleneğinde yıldızları okuyan, takvim hazırlayan ve bunun üzerinden hükümler veren bilim adamına verilen addır. Saray müneccimi, halk müneccimi, dervîş müneccim — biçimleri çeşitli olsa da hepsi aynı geleneğin bir kolundan beslenirdi: <em>ilm-i nücûm</em> ile insan hayatı arasında bir tercüman olmak.
+        </p>
+      </section>
+
+      <section>
+        <h2>Müneccim Kelimesinin Anlamı</h2>
+        <p>
+          "Müneccim" kelimesi Arapça <em>necm</em> (yıldız) kökünden gelir; "yıldız sahibi, yıldız ile uğraşan" demektir. Osmanlı'da bu kelime hem astronomu hem astroloğu kapsayan geniş bir tanım taşıyordu; çünkü o dönemde iki bilim henüz keskin sınırlarla ayrılmamıştı. Bir müneccim hem rasathanede gözlem yapar, hem takvim hesaplar, hem de bir ismin yıldıznamesini yazardı.
+        </p>
+        <p>
+          Arap, Fars ve Türk geleneğinde aynı kelimenin farklı tonları vardı: bazen büyük bir saygı, bazen şüphe. Bazı âlimler müneccimlerin halk arasında dolaşan ucuz tahminlerini eleştirdi; bazıları onu <em>hesab-ı sa'd</em> üzerinden devletin işine yarayan bir bilim adamı saydı. <strong>yıldızna.me</strong> bu ikinci, ciddi tarafa akrabadır.
+        </p>
+      </section>
+
+      <section>
+        <h2>Saray Müneccimliği: Bir Ulemâ Sınıfı</h2>
+        <p>
+          Osmanlı'da müneccimler ulemâ sınıfına dahildi. Müderrislik (medrese hocalığı) ile aynı kategoride değerlendirilirler, kadılık silsilesine geçebilirlerdi. Devlet kayıtlarında müneccimlere maaş ödenirdi; her yıl belirli vakitlerde padişaha takvim sunmak görevleri arasındaydı.
+        </p>
+        <p>
+          Bu görev önemsiz değildi. Bir savaşa çıkış vakti, bir cülûs (taht töreni) zamanı, bir şehzade doğumu — bütün bunlar müneccimin sözüne danışılarak belirlenirdi. Saray bu sözü her zaman dinlemiyordu (XVI. yüzyıldan sonra şüpheyle karışık bir gelenek vardı); ama söz daima talep edilirdi.
+        </p>
+      </section>
+
+      <div class="section-sep" aria-hidden="true">✦</div>
+
+      <section>
+        <h2>Müneccimbaşı: Padişahın Yıldız Hocası</h2>
+        <p>
+          Saray hiyerarşisinin en tepesinde <strong>Müneccimbaşı</strong> bulunurdu. Bu makam XVII. yüzyılda istikrar kazandı; ondan önce bireysel müneccimler vardı, sonra tek bir başmüneccimin sorumluluğunda bir kurum kuruldu. Müneccimbaşı'nın altında ikinci müneccim ve kâtipler vardı; hepsi birlikte saray takvimi, salgın uyarıları, doğum yıldıznameleri ile uğraşırdı.
+        </p>
+        <p>
+          Müneccimbaşılar arasında <strong>Takiyüddin Râsıd</strong> özel bir yer tutar: Sultan III. Murad döneminde İstanbul'da bir rasathane kurdurdu (Tophane civarında, kısa bir süre sonra yıktırılan o meşhur rasathane). Bu girişim Osmanlı'nın astronomi tarihindeki en cüretkâr atılımlardan biriydi. Daha sonra Hâkim Sinan Paşa, Müneccimbaşı Ahmed Dede, Hüseyin Hüsnü gibi isimler bu makamı taşıdı.
+        </p>
+      </section>
+
+      <section>
+        <h2>Müneccim Ne Yapardı?</h2>
+        <p>
+          Bir saray müneccimi gününü şu işlerle geçirirdi:
+        </p>
+        <ul>
+          <li><strong>Takvim hazırlamak</strong>: yıllık takvim, ay vakitleri, gün doğumu ve batımı, <a href="/menzil">ay menzilleri</a>.</li>
+          <li><strong>Sa'd ve nâhz tayini</strong>: "uğurlu" ve "uğursuz" vakitlerin hesaplanması; sefer, evlilik, sünnet, taşınma gibi büyük başlangıçların doğru zamanını söylemek.</li>
+          <li><strong>Yıldızname yazmak</strong>: yeni doğanların yıldıznamesini kayda geçirmek; padişah ailesi için titiz olanları ipek üzerine.</li>
+          <li><strong>Tutulma ve kuyruklu yıldız yorumları</strong>: ay/güneş tutulmaları, kuyruklu yıldız geçişleri — bunların neye işaret ettiğini sarayın istediği şekilde rapor etmek.</li>
+          <li><strong>Rasat</strong>: Gözlem aletleriyle gökyüzünü izlemek; bunu klasik İslâm astronomi kitapları (Bîrûnî, Tûsî, Uluğ Bey'in Zîc-i Sultânî'si) ışığında yorumlamak.</li>
+        </ul>
+        <p>
+          Bu işler hep birlikte yapılırdı; müneccim aynı anda astronom, astrolog ve tarih kayıtçısıydı.
+        </p>
+      </section>
+
+      <section>
+        <h2>Tanınmış Müneccimler</h2>
+        <p>
+          Osmanlı tarihinde adı bilinen pek çok müneccim vardır. Birkaç köşe taşı:
+        </p>
+        <ul>
+          <li><strong>Sinan Paşa</strong> (Hızır Bey'in oğlu) — XV. yüzyıl; matematik ve astronomi bilgisiyle sarayda iz bıraktı.</li>
+          <li><strong>Mîrim Çelebi</strong> — XV. yüzyıl; Uluğ Bey'in Zîc-i Sultânî'si üzerine şerh yazdı.</li>
+          <li><strong>Takiyüddin Râsıd</strong> — XVI. yüzyıl; İstanbul Rasathanesi'nin kurucusu, Osmanlı astronomi tarihinin en parlak isimlerinden.</li>
+          <li><strong>Müneccimbaşı Ahmed Dede</strong> — XVII. yüzyıl; hem astronom hem tarihçi, "Câmiü'd-Düvel" adlı geniş bir tarih eseri kaleme aldı.</li>
+          <li><strong>Hüseyin Hüsnü Efendi</strong> — XIX. yüzyıl son müneccimbaşılardan; Osmanlı'nın son demlerinde takvim çalışmalarını sürdürdü.</li>
+        </ul>
+        <p>
+          Bu silsile XIX. yüzyıl sonlarında resmî kurum olarak son buldu; ama ilm-i nücûm geleneği — daha kapalı, halk arasına çekilmiş, ama ölmemiş — yaşamaya devam etti.
+        </p>
+      </section>
+
+      <div class="section-sep" aria-hidden="true">✦</div>
+
+      <section>
+        <h2>Bugün Bir Müneccimin Okuması</h2>
+        <p>
+          Saray müneccimleri tarih oldu; ama <a href="/yildizname">yıldızname</a>'yi okuma sanatı yaşamaya devam ediyor. <strong>yıldızna.me</strong>'nin yapmaya çalıştığı şey klasik bir müneccimin disiplinini bugünün diline taşımak: <a href="/ebced">ebced</a> ile başlayan, ayın menzili ile derinleşen, kişinin kendi adından, anne adından ve doğum tarihinden çıkan bir okuma. Genel bir burç değil; kişiye özel bir hüküm.
+        </p>
+        <p>
+          Bunu yapmak için bir saray gerekmiyor — bir ad, bir anne adı ve bir doğum tarihi yeter. Ama saray edebî diline sadık kalmak gerekiyor: çünkü yıldıznameyi yıldızname yapan şey kullandığı dil de.
+        </p>
+      </section>
+
+      <aside class="content-cta">
+        <hr class="gold-rule" />
+        <p class="cta-prompt">Müneccim senin için kalemini elinde tutuyor.</p>
+        <a href="/" class="btn-gold-outline">Yıldıznameni Oku →</a>
+      </aside>
+
+      <nav class="content-related" aria-label="İlgili sayfalar">
+        <p class="content-related-label">İlgili okumalar</p>
+        <ul>
+          <li><a href="/yildizname">Yıldızname Nedir?</a></li>
+          <li><a href="/ebced">Ebced Hesabı</a></li>
+          <li><a href="/menzil">Ayın 28 Menzili</a></li>
+          <li><a href="/sss">Sıkça Sorulanlar</a></li>
+        </ul>
+      </nav>
+    </article>
+
+    <script type="module" src="/js/page-init.js"></script>
+  </body>
+</html>

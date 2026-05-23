@@ -219,6 +219,22 @@ app.get("/api/tts/:readingId/:section", async (c) => {
   }
 });
 
+// ----- Static SEO content pages --------------------------------------------
+// Each clean path serves a self-contained static HTML file from public/.
+// Defined as explicit Hono routes (rather than relying on the assets
+// binding's html_handling) because we disabled html_handling = "auto-
+// trailing-slash" earlier to keep the SPA fallback clean. Each route just
+// rewrites the URL to `<slug>.html` and lets the ASSETS binding serve it.
+
+const CONTENT_PAGES = ["yildizname", "ebced", "muneccim", "menzil", "sss"];
+for (const slug of CONTENT_PAGES) {
+  app.get(`/${slug}`, async (c) => {
+    const url = new URL(c.req.url);
+    url.pathname = `/${slug}.html`;
+    return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+  });
+}
+
 // ----- SPA fallback ---------------------------------------------------------
 app.notFound(async (c) => {
   if (c.req.path.startsWith("/api/")) {

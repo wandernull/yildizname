@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <title>Ebced Hesabı: Harflerin Sayıları, Sayıların Hükmü — yıldızna.me</title>
+    <meta
+      name="description"
+      content="Ebced hesabı, Arap harflerinin sayısal değerleri üzerinden anlam çıkarma sanatıdır. Yıldıznamenin omurgası; tarih düşürmeden tılsıma, klasik kullanımları ve harf cetveli."
+    />
+    <link rel="canonical" href="https://yildizna.me/ebced" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Ebced Hesabı: Harflerin Sayıları" />
+    <meta property="og:description" content="Yıldıznamenin omurgasını oluşturan ebced cetveli ve klasik kullanımları." />
+    <meta property="og:url" content="https://yildizna.me/ebced" />
+    <meta property="og:locale" content="tr_TR" />
+    <meta property="og:site_name" content="yıldızna.me" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Ebced Hesabı" />
+    <meta name="twitter:description" content="Yıldıznamenin omurgasını oluşturan harf-sayı cetveli." />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": "Ebced Hesabı: Harflerin Sayıları, Sayıların Hükmü",
+        "description": "Ebced hesabı, Arap harflerinin sayısal değerleri üzerinden anlam çıkarma sanatıdır.",
+        "inLanguage": "tr",
+        "author": { "@type": "Organization", "name": "yıldızna.me" },
+        "publisher": { "@type": "Organization", "name": "yıldızna.me" }
+      }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Noto+Serif:wght@400;600&display=swap"
+    />
+    <link rel="stylesheet" href="/styles/main.css" />
+    <link rel="stylesheet" href="/styles/content.css" />
+  </head>
+  <body>
+    <canvas id="starfield" aria-hidden="true"></canvas>
+    <div id="moon" aria-hidden="true">
+      <svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fff5d6" stop-opacity="0.4" />
+            <stop offset="60%" stop-color="#c9a84c" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="#c9a84c" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="moonBody" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#eef0f3" />
+            <stop offset="100%" stop-color="#bdc3cb" />
+          </linearGradient>
+        </defs>
+        <circle cx="60" cy="60" r="55" fill="url(#moonGlow)" />
+        <path d="M 70 18 A 42 42 0 1 0 70 102 A 32 32 0 1 1 70 18 Z" fill="url(#moonBody)" opacity="0.92" />
+      </svg>
+    </div>
+    <div id="shooting-star-host" aria-hidden="true"></div>
+
+    <header class="content-nav">
+      <a href="/" class="brand-link">yıldızna.me</a>
+    </header>
+
+    <article class="content-article">
+      <header class="content-header">
+        <h1>Ebced Hesabı</h1>
+        <p class="subtitle">Harflerin Sayıları, Sayıların Hükmü</p>
+        <hr class="gold-rule" />
+      </header>
+
+      <section>
+        <p>
+          <strong>Ebced hesabı</strong>, Arap harflerinin her birine geleneksel bir sayı değeri verip bu sayılar üzerinden anlam çıkarma sanatıdır. İslâm medeniyetinin asırlık derinliğinde matematik, mistisizm ve edebî oyun olarak hep yan yana yaşamıştır. <a href="/yildizname">Yıldızname</a>'nin omurgasıdır: bir ismin ya da bir tarihin "ne söylediğini" anlamak için önce ebced'i bilmek gerekir.
+        </p>
+      </section>
+
+      <section>
+        <h2>Ebced'in Kökenleri</h2>
+        <p>
+          "Ebced" kelimesi Arap alfabesinin ilk dört harfinin (<em>elif</em>, <em>bâ</em>, <em>cîm</em>, <em>dâl</em>) bir sözcük gibi okunmasından gelir. Bu sıralama Arapça'nın bugünkü alfabetik sıralamasından farklıdır: ebced sırası eski Sami alfabesinin köklerini taşır — Fenikece, Aramice, İbranice ile akrabadır. Her dil bu sırayı kendine göre uyarlamış ve harflere sayılar tahsis etmiştir; Arapça'da bugün bildiğimiz cetvel yaklaşık VIII. yüzyılda istikrar kazanmıştır.
+        </p>
+        <p>
+          İslâm dünyasında ebced çok katmanlı bir araç olarak yerleşti: bazen sıradan bir matematik yöntemi (sayma, ölçme), bazen edebî bir tılsım (tarih düşürme), bazen tasavvufî bir derinlik (her harfin kozmosla ilişkisi). Bîrûnî bunu astronomik tablolarında kullandı; Şeyh-i Ekber İbn Arabî'nin <em>Fütûhât</em>'ı boyunca dağılan harf yorumları aynı geleneğin tasavvufî kanadıdır.
+        </p>
+      </section>
+
+      <section>
+        <h2>Harflerin Sayısal Değerleri</h2>
+        <p>
+          Klasik ebced cetvelinde 28 harf, 1'den 1000'e uzanan değerler taşır. Üç tabaka halinde gruplanmıştır: birler, onlar ve yüzler.
+        </p>
+        <table>
+          <thead>
+            <tr><th>Harf</th><th>Adı</th><th>Değer</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ا</td><td>Elif</td><td>1</td></tr>
+            <tr><td>ب</td><td>Bâ</td><td>2</td></tr>
+            <tr><td>ج</td><td>Cîm</td><td>3</td></tr>
+            <tr><td>د</td><td>Dâl</td><td>4</td></tr>
+            <tr><td>ه</td><td>Hâ</td><td>5</td></tr>
+            <tr><td>و</td><td>Vâv</td><td>6</td></tr>
+            <tr><td>ز</td><td>Zâ</td><td>7</td></tr>
+            <tr><td>ح</td><td>Hâ</td><td>8</td></tr>
+            <tr><td>ط</td><td>Tâ</td><td>9</td></tr>
+            <tr><td>ي</td><td>Yâ</td><td>10</td></tr>
+            <tr><td>ك</td><td>Kâf</td><td>20</td></tr>
+            <tr><td>ل</td><td>Lâm</td><td>30</td></tr>
+            <tr><td>م</td><td>Mîm</td><td>40</td></tr>
+            <tr><td>ن</td><td>Nûn</td><td>50</td></tr>
+            <tr><td>س</td><td>Sîn</td><td>60</td></tr>
+            <tr><td>ع</td><td>Ayın</td><td>70</td></tr>
+            <tr><td>ف</td><td>Fâ</td><td>80</td></tr>
+            <tr><td>ص</td><td>Sâd</td><td>90</td></tr>
+            <tr><td>ق</td><td>Kâf</td><td>100</td></tr>
+            <tr><td>ر</td><td>Râ</td><td>200</td></tr>
+            <tr><td>ش</td><td>Şîn</td><td>300</td></tr>
+            <tr><td>ت</td><td>Tâ</td><td>400</td></tr>
+            <tr><td>ث</td><td>Sâ</td><td>500</td></tr>
+            <tr><td>خ</td><td>Hâ</td><td>600</td></tr>
+            <tr><td>ذ</td><td>Zel</td><td>700</td></tr>
+            <tr><td>ض</td><td>Dad</td><td>800</td></tr>
+            <tr><td>ظ</td><td>Zâ</td><td>900</td></tr>
+            <tr><td>غ</td><td>Ğayn</td><td>1000</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Bu cetvelde dikkat çeken bir simetri vardır: birler 1-9, onlar 10-90, yüzler 100-900 olarak dizilir; sonda yalnız <em>ğayn</em> 1000 olarak tek başına durur. Bu yapı sadece matematik değildir — pek çok klasik kaynak buradan kozmolojik dersler çıkarır.
+        </p>
+      </section>
+
+      <div class="section-sep" aria-hidden="true">✦</div>
+
+      <section>
+        <h2>Ebced'in Klasik Kullanımları</h2>
+        <p>
+          Ebced'in en bilinen kullanımı <em>tarih düşürme</em>'dir. Bir caminin yapımı, bir hocanın vefatı, bir köprünün açılışı — Osmanlı şairi bunu kayda geçirmek istediğinde özel bir mısra yazardı: o mısraın harflerinin sayısal değerlerinin toplamı, olayın Hicrî tarihini verirdi. Bu hem bir şairlik becerisiydi hem de bir tarihçilik: Hâfız Şîrâzî'den Nâbî'ye, Şeyh Galib'ten Yahyâ Kemâl'e büyük şairlerin nice mısraları ebced ile saklı bir tarih taşır.
+        </p>
+        <p>
+          Ebced ayrıca tılsımlarda, kaligrafide, tasavvufî yazılarda kullanılır. Bazen bir isme yedi defa Esmâ-i Hüsnâ'dan birinin ebcedi katılır; bazen bir hastalığa karşı yazılmış bir levhada görünmez sayılarla anlam korunur. Bütün bu kullanımların ortak noktası şudur: harf yalnızca sesin değil, sayının ve anlamın da kapısıdır.
+        </p>
+      </section>
+
+      <section>
+        <h2>Yıldıznamede Ebced'in Yeri</h2>
+        <p>
+          Yıldızname okuyan <a href="/muneccim">müneccim</a> ebced'i bir hesap aracı olarak kullanır. İşlem şu sırayla yürür:
+        </p>
+        <ol>
+          <li>Kişinin <em>adı</em> ve <em>anne adı</em> Arap harfleriyle yazıldığı düşünülerek harf harf çözümlenir.</li>
+          <li>Her harf ebced cetvelinden sayısına çevrilir.</li>
+          <li>Bu sayılar toplanır, <em>indirgenir</em> (kalan tek haneli sayı bulununcaya kadar rakamlar art arda toplanır).</li>
+          <li>Doğum tarihinin sayısal indirgemesi (gün + ay + yıl) eklenir.</li>
+          <li>Sonuçta ortaya çıkan sayı bir "hüküm sayısı"dır; o sayının klasik geleneğin verdiği anlamına göre yorum yapılır.</li>
+        </ol>
+        <p>
+          Klasik kaynaklar 1'den 9'a kadar olan rakamların her birine sembolik bir yön atfeder: <em>1</em> birlik ve baş olma, <em>2</em> ikiliğin gerilimi, <em>3</em> hâkimiyet, <em>4</em> sebat, <em>5</em> hareket, <em>6</em> muvazene, <em>7</em> sırlar ve içe dönüş, <em>8</em> nimet ve dünya, <em>9</em> kemâl. Bu basit eşleştirme tek başına yetmez: kişinin adındaki baskın harflerin türü, o sayıların hangi sırada ortaya çıktığı, doğum tarihinin onu nasıl yumuşattığı veya keskinleştirdiği — bütün bunlar yorumu kişiye özel kılar.
+        </p>
+      </section>
+
+      <section>
+        <h2>Bir Örnek: Bir İsmin Hesabı</h2>
+        <p>
+          Misal olarak <strong>"Mehmed"</strong> (محمد) adını alalım. Harf harf:
+        </p>
+        <ul>
+          <li>Mîm (م) = 40</li>
+          <li>Hâ (ح) = 8</li>
+          <li>Mîm (م) = 40</li>
+          <li>Dâl (د) = 4</li>
+        </ul>
+        <p>
+          Toplam: 40 + 8 + 40 + 4 = <strong>92</strong>. İndirgeme: 9 + 2 = 11; 1 + 1 = <strong>2</strong>.
+        </p>
+        <p>
+          "Mehmed" ismi ebced'de 2 sayısının hükmü altında okunur — ikiliğin gerilimini, iki tarafı bir araya getirme görevini taşır. Buna anne adının sayısı (örneğin "Fâtıma" = 80+1+9+40+5 = 135 → 1+3+5 = <strong>9</strong>, kemâl) ve doğum tarihinin sayısı eklenir; üç sayının bir araya gelişi kişinin asıl hüküm sayısını verir.
+        </p>
+        <p>
+          Burada gösterilen hesap basitleştirilmiştir; klasik kaynaklar farklı varyantlar kullanır (harekelerin etkisi, harflerin tek tek mi birleşik mi alındığı, vs.). Önemli olan ilke: <em>bir ismin sayısı vardır, ve o sayı tesadüfî değildir.</em>
+        </p>
+      </section>
+
+      <div class="section-sep" aria-hidden="true">✦</div>
+
+      <section>
+        <h2>Modern Numerolojiden Farkı</h2>
+        <p>
+          Modern numeroloji XX. yüzyılda popülerleşmiş, Pythagoras felsefesinin gevşek bir uyarlamasıdır. Latin alfabesinin her harfine 1-9 arası bir değer verir ve toplamlardan kişilik yorumları çıkarır. Ebced ile arasında üç temel fark vardır:
+        </p>
+        <ul>
+          <li><strong>Sistem</strong>: Ebced 28 harfe 1'den 1000'e değerler atar; modern numeroloji 26 harfe 1-9 atar. Sayı dağılımı tamamen farklıdır.</li>
+          <li><strong>Köken</strong>: Ebced Sami dillerinin yüzyıllar içinde olgunlaştırdığı bir cetveldir; modern numeroloji XIX. yüzyıl sonu New Age hareketinin bir ürünüdür.</li>
+          <li><strong>Dil</strong>: Ebced'in arkasında ilm-i hurûf'un kozmolojisi vardır; harf, ses, sayı ve anlam birbirinden ayrılamaz. Modern numeroloji harfi sadece bir taşıyıcı sayar, içeriğe daha az girer.</li>
+        </ul>
+        <p>
+          İki sistem aynı meseleyle uğraşıyor görünse de — "bir ismin sayısı nedir" — vardıkları yer farklıdır. Yıldızname klasik ebced'i kullanır; modern numeroloji burada yoktur.
+        </p>
+      </section>
+
+      <aside class="content-cta">
+        <hr class="gold-rule" />
+        <p class="cta-prompt">Senin adının sayısı ne? Müneccim baksın.</p>
+        <a href="/" class="btn-gold-outline">Yıldıznameni Oku →</a>
+      </aside>
+
+      <nav class="content-related" aria-label="İlgili sayfalar">
+        <p class="content-related-label">İlgili okumalar</p>
+        <ul>
+          <li><a href="/yildizname">Yıldızname Nedir?</a></li>
+          <li><a href="/muneccim">Müneccim</a></li>
+          <li><a href="/menzil">Ayın 28 Menzili</a></li>
+          <li><a href="/sss">Sıkça Sorulanlar</a></li>
+        </ul>
+      </nav>
+    </article>
+
+    <script type="module" src="/js/page-init.js"></script>
+  </body>
+</html>
