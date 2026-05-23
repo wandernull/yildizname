@@ -958,11 +958,19 @@ async function handleShare(btn) {
   }
 }
 
-// Price string is hardcoded in two display sites (inline payment button +
-// unlock modal). The wrangler.toml value (READING_PRICE_TRY) is used by
-// the server for the actual charge amount; if you change one, change both.
+// Price is revealed exclusively in the unlock modal — kept off the inline
+// CTA labels so the user only encounters the number once they've engaged
+// with the reveal. The string here is the hardcoded display label inside
+// the modal; the server uses READING_PRICE_TRY from wrangler.toml for the
+// actual charge amount. If you change the price, update wrangler.toml AND
+// this constant AND public/sss.html.
 const PRICE_LABEL = "349,99 ₺";
-const INLINE_PAYMENT_LABEL = `Kaderinin tamamını aç — ${PRICE_LABEL}`;
+
+// Shared button label used by both the inline payment blocks and the
+// modal CTA. Same wording on purpose — clicking the inline button opens
+// the modal, the modal's CTA performs the actual unlock; the consistent
+// label makes the two-step flow feel like one continuous action.
+const PAYMENT_CTA_LABEL = "Kaderinin tamamını aç →";
 
 // Shared unlock flow. Used by makePaymentBlock (inline gold-fill buttons)
 // AND the sticky-CTA reveal modal. Toggles loading/error state on the
@@ -1046,11 +1054,29 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
     bottomObs.disconnect();
   });
 
-  // Modal open/close.
-  stickyTrigger.addEventListener("click", () => {
-    modalError.hidden = true;
+  // Single function that opens the modal in a clean state — resets any
+  // error/loading from a previous attempt so the user sees the reveal
+  // afresh every time.
+  const openModal = () => {
+    if (modalError) modalError.hidden = true;
+    modalCta.disabled = false;
+    modalCta.textContent = PAYMENT_CTA_LABEL;
     modal.showModal();
-  });
+  };
+
+  // ALL three CTA entry points open the same modal:
+  //   - the sticky bar on mobile
+  //   - the top inline payment block (after karakterinOzu)
+  //   - the bottom inline payment block (after the locked sections)
+  // The modal is the single place that performs the actual unlock and
+  // displays the price — keeps the disclosure consistent regardless of
+  // which CTA the user taps.
+  stickyTrigger.addEventListener("click", openModal);
+  for (const btn of root.querySelectorAll(".payment-block .btn-gold-fill")) {
+    btn.addEventListener("click", openModal);
+  }
+
+  // Modal close affordances: × button, backdrop click, native ESC handler.
   modalClose.addEventListener("click", () => modal.close());
   modal.addEventListener("click", (ev) => {
     // Clicking the backdrop (the <dialog> itself, not its inner content)
@@ -1058,10 +1084,9 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
     if (ev.target === modal) modal.close();
   });
 
-  // Modal CTA → same unlock flow as the inline buttons.
-  const MODAL_CTA_LABEL = "Kaderinin tamamını aç →";
+  // Modal CTA → actual unlock. Single source of truth for the action.
   modalCta.addEventListener("click", () => {
-    performUnlock(id, router, modalCta, modalError, MODAL_CTA_LABEL);
+    performUnlock(id, router, modalCta, modalError, PAYMENT_CTA_LABEL);
   });
 
   disposables.push(() => {
@@ -1069,22 +1094,17 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   });
 }
 
-function makePaymentBlock(id, router) {
+function makePaymentBlock() {
   const wrap = document.createElement("div");
   wrap.className = "payment-block";
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "btn-gold-fill";
-  btn.textContent = INLINE_PAYMENT_LABEL;
-  const err = document.createElement("p");
-  err.className = "payment-error";
-  err.hidden = true;
-  wrap.append(btn, err);
-
-  btn.addEventListener("click", () => {
-    performUnlock(id, router, btn, err, INLINE_PAYMENT_LABEL);
-  });
-
+  btn.textContent = PAYMENT_CTA_LABEL;
+  wrap.append(btn);
+  // No click handler here — wireStickyAndModal attaches one that opens
+  // the reveal modal. The modal's own CTA is what eventually calls
+  // performUnlock. Single source of truth for the unlock action.
   return wrap;
 }
 
@@ -1168,7 +1188,7 @@ export function renderResult(router, { id, unlockedQuery }) {
       // with "Tam okumayla açılır" hint) so the top placement mirrors the
       // bottom exactly.
       if (!isUnlocked) {
-        sectionsHost.appendChild(makePaymentBlock(id, router));
+        sectionsHost.appendChild(makePaymentBlock());
         sectionsHost.appendChild(makeLockedActionsBlock());
       }
 
@@ -1194,7 +1214,7 @@ export function renderResult(router, { id, unlockedQuery }) {
       }
 
       if (!isUnlocked) {
-        sectionsHost.appendChild(makePaymentBlock(id, router));
+        sectionsHost.appendChild(makePaymentBlock());
       }
 
       // The post-action buttons are visible at the bottom of the result
