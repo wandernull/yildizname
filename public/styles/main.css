@@ -341,23 +341,28 @@ h4 {
   border-color: var(--gold-light);
 }
 
-/* Sticky bottom CTA — mobile-only, gives non-tech users a persistent
-   discovery path to the unlock without breaking the mystical aesthetic.
-   Deliberately doesn't show the price (the modal does that on tap). */
+/* Sticky bottom CTA — mobile-only. The previous version used a
+   transparent button with italic gold text and read as a "secondary
+   link" — users scrolled right past it. Now the trigger is a full-
+   width gold-gradient pill (same visual weight as the inline
+   .btn-gold-fill payment button) so it registers as a primary CTA at
+   a glance. The dark tray around it preserves the brand atmosphere;
+   the gold pill is the part the user clicks. Price is still hidden
+   here (the modal does the reveal on tap). */
 .sticky-cta {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 10;
-  padding: 0.85rem 1rem;
-  padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+  padding: 0.75rem 1rem;
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   background: linear-gradient(
     180deg,
-    rgba(10, 14, 26, 0.55) 0%,
-    var(--deep) 70%
+    rgba(10, 14, 26, 0.78) 0%,
+    var(--deep) 55%
   );
-  border-top: 1px solid rgba(201, 168, 76, 0.32);
+  border-top: 1px solid rgba(201, 168, 76, 0.4);
   text-align: center;
   opacity: 0;
   transform: translateY(8px);
@@ -370,20 +375,25 @@ h4 {
   pointer-events: auto;
 }
 .sticky-cta-trigger {
-  background: transparent;
+  display: block;
+  width: 100%;
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
+  color: var(--deep);
   border: none;
-  color: var(--gold-light);
   font-family: var(--font-display);
-  font-style: italic;
-  font-size: 1.15rem;
-  letter-spacing: 0.05em;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  padding: 0.85rem 1.5rem;
+  border-radius: 2px;
   cursor: pointer;
-  padding: 0.4rem 1rem;
-  transition: color 0.3s ease;
+  box-shadow: 0 4px 18px rgba(201, 168, 76, 0.35);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
 .sticky-cta-trigger:hover,
 .sticky-cta-trigger:active {
-  color: var(--gold);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px rgba(201, 168, 76, 0.45);
 }
 @media (min-width: 641px) {
   .sticky-cta {
