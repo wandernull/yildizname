@@ -8,6 +8,7 @@ import {
 import { generateYildizname } from "./lib/llm";
 import {
   createCheckoutSession,
+  createStripeCustomer,
   fetchInvoiceMetadata,
   verifyStripeSignature,
 } from "./lib/stripe";
@@ -165,10 +166,17 @@ app.post("/api/unlock", async (c) => {
   const origin = new URL(c.req.url).origin;
 
   try {
+    // Pre-create a Stripe Customer with preferred_locales=['tr'] so the
+    // auto-generated invoice (hosted page + PDF + receipt email) renders
+    // in Turkish. The Checkout `locale` param controls the payment page
+    // UI only; invoice locale is driven by the Customer's preferred_locales.
+    // One extra Stripe API call per unlock attempt — cheap and fast.
+    const customer = await createStripeCustomer(c.env, { readingId: id });
     const session = await createCheckoutSession(c.env, {
       readingId: id,
       origin,
       amountKurus,
+      customerId: customer.id,
     });
     // Persist the session id so the webhook can correlate if the
     // metadata lookup ever fails.

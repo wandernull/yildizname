@@ -49,6 +49,51 @@ export interface CheckoutSessionResult {
   url: string;
 }
 
+// Pre-create a Stripe Customer with preferred_locales=['tr'] so the
+// auto-generated invoice (hosted page + PDF + receipt email) renders in
+// Turkish. Stripe's Checkout `locale` parameter controls the payment
+// page UI only — it does NOT propagate to the invoice. Invoice locale
+// is driven by the Customer object's preferred_locales field, which is
+// set at customer creation time. By pre-creating the customer here and
+// passing it into the Checkout Session, we ensure the customer exists
+// with the right locale before Stripe finalizes the invoice. Without
+// this, Stripe auto-creates a guest customer with no preferred_locales
+// → invoice defaults to English regardless of the Checkout language.
+export async function createStripeCustomer(
+  env: Env,
+  args: { readingId: string },
+): Promise<{ id: string }> {
+  const params = new URLSearchParams();
+  // Tell Stripe to render any future invoice / receipt / hosted page
+  // tied to this customer in Turkish. Stripe matches the first locale
+  // it supports; falls back to English if none match.
+  params.append("preferred_locales[]", "tr");
+  // Stamp the reading id in customer metadata so we can trace a Stripe
+  // customer back to a reading from the Dashboard if support ever asks.
+  params.append("metadata[reading_id]", args.readingId);
+
+  const res = await fetch(`${STRIPE_API_BASE}/customers`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[stripe] customer create failed", {
+      status: res.status,
+      body: body.slice(0, 500),
+    });
+    throw new Error(`Stripe ${res.status}`);
+  }
+
+  const customer = (await res.json()) as { id: string };
+  return { id: customer.id };
+}
+
 // Create a Stripe Checkout Session for the given reading. Returns the
 // hosted Checkout URL — the caller redirects the user to it. Stripe will
 // redirect back to /okuma/:id?paid=1&session={CHECKOUT_SESSION_ID} on
@@ -59,6 +104,7 @@ export async function createCheckoutSession(
     readingId: string;
     origin: string; // e.g. "https://yildizna.me" or "http://localhost:8787"
     amountKurus: number; // 34999 for 349,99 ₺
+    customerId: string; // pre-created via createStripeCustomer — sets invoice locale
   },
 ): Promise<CheckoutSessionResult> {
   const params = new URLSearchParams();
@@ -71,6 +117,16 @@ export async function createCheckoutSession(
   params.append("client_reference_id", args.readingId);
   params.append("metadata[reading_id]", args.readingId);
   params.append("payment_intent_data[metadata][reading_id]", args.readingId);
+
+  // Use the pre-created Stripe Customer so the invoice inherits the
+  // customer's preferred_locales=['tr'] and renders in Turkish (hosted
+  // page, PDF, and receipt email). See createStripeCustomer above.
+  params.append("customer", args.customerId);
+  // Flow the billing details the user enters on the Checkout page back
+  // to the Customer object — so the invoice has the right name + address
+  // and any future support lookup has them too.
+  params.append("customer_update[name]", "auto");
+  params.append("customer_update[address]", "auto");
 
   // Inline price_data — no pre-configured Stripe Price ID needed. Same
   // call to action that's shown to the user in the modal.
