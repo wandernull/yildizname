@@ -1169,3 +1169,64 @@ h4 {
     page-break-inside: avoid;
   }
 }
+
+/* ============================================================
+ * Site footer
+ * ============================================================
+ * Visible on every page (SPA + content pages). Two stacked lines:
+ *   1. Legal/contact links (Gizlilik, Koşullar, SSS, İletişim)
+ *   2. Brand+entity attribution — same wording as the Stripe Checkout
+ *      submit message + invoice footer (BRAND_ATTRIBUTION in stripe.ts),
+ *      so the legal entity is visible everywhere the customer transacts
+ *      or considers transacting.
+ * Sits in normal document flow at the bottom — on the result page the
+ * sticky CTA briefly overlays it on small screens, but the user can
+ * scroll past it once they've passed the locked-content section.
+ * ============================================================ */
+.site-footer {
+  margin: 4rem auto 0;
+  padding: 2rem 1.5rem 2.5rem;
+  max-width: 720px;
+  text-align: center;
+  border-top: 1px solid rgba(201, 168, 76, 0.15);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: rgba(184, 196, 212, 0.55);
+}
+.site-footer-legal {
+  margin: 0 0 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+.site-footer-legal a {
+  color: var(--gold);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.site-footer-legal a:hover,
+.site-footer-legal a:focus-visible {
+  color: var(--gold-light);
+  border-bottom-color: rgba(232, 208, 138, 0.45);
+}
+.site-footer-legal span {
+  color: rgba(201, 168, 76, 0.35);
+  user-select: none;
+}
+.site-footer-attribution {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: rgba(184, 196, 212, 0.4);
+}
+
+@media (max-width: 480px) {
+  .site-footer {
+    margin-top: 3rem;
+    padding: 1.5rem 1rem 2rem;
+    font-size: 0.8rem;
+  }
+}

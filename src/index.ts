@@ -349,13 +349,34 @@ app.get("/api/tts/:readingId/:section", async (c) => {
 // trailing-slash" earlier to keep the SPA fallback clean. Each route just
 // rewrites the URL to `<slug>.html` and lets the ASSETS binding serve it.
 
-const CONTENT_PAGES = ["yildizname", "ebced", "muneccim", "menzil", "sss"];
+const CONTENT_PAGES = [
+  "yildizname",
+  "ebced",
+  "muneccim",
+  "menzil",
+  "sss",
+  "gizlilik",
+  "kosullar",
+];
 for (const slug of CONTENT_PAGES) {
   app.get(`/${slug}`, async (c) => {
     const url = new URL(c.req.url);
     url.pathname = `/${slug}.html`;
     return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
   });
+}
+
+// English path aliases for the legal pages. Stripe support, AI agents,
+// browser autofill, and ~everyone else guesses /privacy and /terms first.
+// 301 redirects to the Turkish canonical URLs so search engines see a
+// single source per page (no duplicate-content penalty) while still
+// catching anyone who arrives at the English path.
+const LEGAL_ALIASES: Record<string, string> = {
+  "/privacy": "/gizlilik",
+  "/terms": "/kosullar",
+};
+for (const [from, to] of Object.entries(LEGAL_ALIASES)) {
+  app.get(from, (c) => c.redirect(to, 301));
 }
 
 // ----- SPA fallback ---------------------------------------------------------

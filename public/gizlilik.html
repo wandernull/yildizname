@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <title>Gizlilik Politikası — yıldızna.me</title>
+    <meta
+      name="description"
+      content="yıldızna.me'nin kişisel veri işleme uygulamaları: hangi verileri topladığımız, neden topladığımız, kimlerle paylaştığımız ve kullanıcı olarak haklarınız. KVKK ve GDPR uyumlu aydınlatma metni."
+    />
+    <link rel="canonical" href="https://yildizna.me/gizlilik" />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Gizlilik Politikası" />
+    <meta property="og:description" content="yıldızna.me'nin kişisel veri işleme uygulamaları ve KVKK / GDPR uyumlu aydınlatma metni." />
+    <meta property="og:url" content="https://yildizna.me/gizlilik" />
+    <meta property="og:locale" content="tr_TR" />
+    <meta property="og:site_name" content="yıldızna.me" />
+    <meta property="og:image" content="https://yildizna.me/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Yıldızna.me — altın hilâl ve ay altında bir yıldızname okuması" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Gizlilik Politikası" />
+    <meta name="twitter:description" content="yıldızna.me'nin kişisel veri işleme uygulamaları." />
+    <meta name="twitter:image" content="https://yildizna.me/og-image.png" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Noto+Serif:wght@400;600&display=swap"
+    />
+    <link rel="stylesheet" href="/styles/main.css" />
+    <link rel="stylesheet" href="/styles/content.css" />
+  </head>
+  <body>
+    <canvas id="starfield" aria-hidden="true"></canvas>
+    <div id="moon" aria-hidden="true">
+      <svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fff5d6" stop-opacity="0.4" />
+            <stop offset="60%" stop-color="#c9a84c" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="#c9a84c" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="moonBody" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#eef0f3" />
+            <stop offset="100%" stop-color="#bdc3cb" />
+          </linearGradient>
+        </defs>
+        <circle cx="60" cy="60" r="55" fill="url(#moonGlow)" />
+        <path d="M 70 18 A 42 42 0 1 0 70 102 A 32 32 0 1 1 70 18 Z" fill="url(#moonBody)" opacity="0.92" />
+      </svg>
+    </div>
+    <div id="shooting-star-host" aria-hidden="true"></div>
+
+    <header class="content-nav">
+      <a href="/" class="brand-link">yıldızna.me</a>
+    </header>
+
+    <article class="content-article">
+      <header class="content-header">
+        <h1>Gizlilik Politikası</h1>
+        <p class="subtitle">Kişisel verilerin nasıl işlendiğine dair aydınlatma metni</p>
+        <hr class="gold-rule" />
+        <p class="legal-meta">Son güncelleme: 25 Mayıs 2026</p>
+      </header>
+
+      <section class="qa">
+        <h2>1. Veri sorumlusu</h2>
+        <p>
+          yıldızna.me, <strong>Back of the Envelope B.V.</strong> şirketinin bir markasıdır. Bu sitede toplanan kişisel verilerin sorumlusu (data controller / veri sorumlusu) aşağıdaki kuruluştur:
+        </p>
+        <p class="legal-block">
+          Back of the Envelope B.V.<br />
+          Almere, Hollanda<br />
+          KVK: 97838810<br />
+          VAT: NL868254010B01<br />
+          İletişim: <a href="mailto:support@yildizna.me">support@yildizna.me</a> &middot; <a href="mailto:destek@yildizna.me">destek@yildizna.me</a>
+        </p>
+        <p>
+          Bu metin hem Avrupa Birliği Genel Veri Koruma Tüzüğü (GDPR) hem de Türkiye'de geçerli olan 6698 sayılı Kişisel Verilerin Korunması Kanunu (KVKK) kapsamındaki aydınlatma yükümlülüğümüzü karşılamak üzere hazırlanmıştır.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>2. Hangi verileri topluyoruz?</h2>
+        <p>
+          Yıldıznamenin oluşturulabilmesi için doğrudan senden talep ettiğimiz veriler:
+        </p>
+        <ul class="legal-list">
+          <li><strong>Adın</strong></li>
+          <li><strong>Anne adın</strong> — klasik yıldızname hesabının temel girdisi</li>
+          <li><strong>Doğum tarihin</strong> ve <strong>doğum yerin</strong></li>
+          <li>İsteğe bağlı: <strong>eşinin adı</strong> ve sormak istediğin <strong>özel soru</strong></li>
+        </ul>
+        <p>
+          Hizmetin işleyişi sırasında otomatik olarak işlenen veriler:
+        </p>
+        <ul class="legal-list">
+          <li><strong>Üretilen yıldıznamen</strong> — yazılı bölümler ve sesli okuma kayıtları</li>
+          <li><strong>Ödeme verileri</strong> — kart bilgilerin doğrudan ödeme sağlayıcımız Stripe tarafından işlenir; biz kart numaranı görmeyiz veya saklamayız. Saklanan veriler: ödeme tutarı, ödeme zamanı, fatura referansı</li>
+          <li><strong>Teknik veriler</strong> — IP adresi, tarayıcı/cihaz türü, ziyaret zamanları (güvenlik ve kötüye kullanım önleme amacıyla altyapı sağlayıcımız Cloudflare tarafından)</li>
+        </ul>
+        <p>
+          Üyelik veya hesap oluşturmuyoruz. Şifren veya e-posta adresin biz tarafından istenmiyor; ödeme sürecinde Stripe e-posta adresini fatura için kendi sistemine kaydedebilir.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>3. Verileri neden işliyoruz? (Hukuki dayanak)</h2>
+        <p>
+          GDPR Madde 6 ve KVKK Madde 5 kapsamında işleme dayanaklarımız:
+        </p>
+        <ul class="legal-list">
+          <li><strong>Sözleşmenin ifası</strong> — sana sipariş ettiğin yıldızname hizmetini sunabilmek için (form verilerin, üretilen okuma, ödeme işlemleri)</li>
+          <li><strong>Yasal yükümlülük</strong> — Hollanda vergi mevzuatı gereği fatura ve ödeme kayıtlarının saklanması</li>
+          <li><strong>Meşru menfaat</strong> — sitenin güvenliği, kötüye kullanım önleme, hizmet kalitesinin iyileştirilmesi</li>
+          <li><strong>Açık rıza</strong> — gönüllü olarak paylaştığın isteğe bağlı bilgiler (eş adı, özel soru) için</li>
+        </ul>
+      </section>
+
+      <div class="section-sep" aria-hidden="true">✦</div>
+
+      <section class="qa">
+        <h2>4. Verileri kimlerle paylaşıyoruz?</h2>
+        <p>
+          Verilerin <strong>üçüncü kişilere satılmaz</strong>. Yıldıznameni oluşturabilmek için aşağıdaki hizmet sağlayıcılarımıza (veri işleyenler / data processors) sınırlı verilerin aktarılması gerekir:
+        </p>
+        <ul class="legal-list">
+          <li><strong>Cloudflare</strong> (ABD/AB) — barındırma, içerik dağıtım ağı, veritabanı (D1), nesne depolama (R2). Tüm trafik ve depolanan veriler Cloudflare altyapısı üzerindedir.</li>
+          <li><strong>Anthropic</strong> (ABD) — yıldıznamenin yazılı bölümlerini üreten büyük dil modeli (Claude). Form verilerin yorumun yazılması için Anthropic'e iletilir; Anthropic varsayılan olarak bu verileri model eğitimi için kullanmaz.</li>
+          <li><strong>ElevenLabs</strong> (ABD) — yazılı bölümlerin sesli okuma kayıtlarını oluşturan ses sentezi sağlayıcısı. Sadece okuma metni iletilir.</li>
+          <li><strong>Stripe</strong> (İrlanda/ABD) — ödeme işlemleri ve fatura oluşturma. Stripe kendi gizlilik politikası altında bağımsız veri sorumlusu olarak hareket eder: <a href="https://stripe.com/privacy" target="_blank" rel="noopener noreferrer">stripe.com/privacy</a></li>
+        </ul>
+        <p>
+          Yasal bir mecburiyet (mahkeme kararı, vergi denetimi vb.) olması durumunda ilgili yetkili mercilere de veri paylaşımı yapılabilir.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>5. Yurtdışına veri aktarımı</h2>
+        <p>
+          Yukarıda saydığımız hizmet sağlayıcıların bir kısmı Amerika Birleşik Devletleri'nde bulunmaktadır. AB ve Türkiye dışına yapılan bu aktarımlar, Avrupa Komisyonu'nun onayladığı <strong>Standart Sözleşme Şartları</strong> (Standard Contractual Clauses) çerçevesinde gerçekleştirilir. Cloudflare, Anthropic, ElevenLabs ve Stripe; AB veri sahipleri için gereken uyum çerçevelerine (EU-U.S. Data Privacy Framework, SCCs) bağlıdır.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>6. Verileri ne kadar süre saklıyoruz?</h2>
+        <ul class="legal-list">
+          <li><strong>Yıldıznamen ve form verilerin</strong> — okuma bağlantın aktif olduğu sürece, yıldıznamene istediğin zaman geri dönebilmen için saklanır. Silinmesini istersen iletişim adresimizden talep edebilirsin.</li>
+          <li><strong>Sesli okuma kayıtları</strong> — yaklaşık 15 gün süreyle önbellekte tutulur, sonra otomatik silinir; ihtiyaç duyduğunda yeniden oluşturulur.</li>
+          <li><strong>Ödeme ve fatura kayıtları</strong> — Hollanda vergi mevzuatı gereği <strong>7 yıl</strong> saklanır.</li>
+          <li><strong>Teknik kayıtlar</strong> (IP, log) — Cloudflare standart kayıt politikalarına göre kısa süreli (genelde 30 gün) tutulur.</li>
+        </ul>
+      </section>
+
+      <section class="qa">
+        <h2>7. Haklarınız</h2>
+        <p>
+          KVKK Madde 11 ve GDPR Madde 15–22 kapsamında veri sahibi olarak şu haklara sahipsin:
+        </p>
+        <ul class="legal-list">
+          <li>Hakkında işlenen verilerin <strong>varlığını öğrenme</strong> ve <strong>erişim talep etme</strong></li>
+          <li>Yanlış veya eksik verilerin <strong>düzeltilmesini</strong> isteme</li>
+          <li>Verilerin <strong>silinmesini</strong> veya yok edilmesini isteme (yasal saklama yükümlülükleri saklı kalmak kaydıyla)</li>
+          <li>İşleme faaliyetlerine <strong>itiraz etme</strong></li>
+          <li>Verilerin <strong>başka bir veri sorumlusuna aktarılmasını</strong> isteme</li>
+          <li>Otomatik karar verme süreçlerinden çıkma talebinde bulunma</li>
+        </ul>
+        <p>
+          Bu haklardan herhangi birini kullanmak için <a href="mailto:support@yildizna.me">support@yildizna.me</a> veya <a href="mailto:destek@yildizna.me">destek@yildizna.me</a> adresine yazabilirsin. Talebine en geç <strong>30 gün</strong> içinde yanıt veririz.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>8. Çerezler</h2>
+        <p>
+          yıldızna.me <strong>takip çerezleri kullanmaz</strong>. Reklam, analitik veya üçüncü taraf izleme amacıyla hiçbir çerez yerleştirilmez. Altyapı sağlayıcımız Cloudflare yalnızca güvenlik ve performans için zorunlu çerezleri kullanabilir; bunlar ziyaretçiyi kişisel olarak tanımlamak veya profillemek için kullanılmaz.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>9. Şikayet hakkı</h2>
+        <p>
+          Verilerinin işlenmesine ilişkin endişelerini önce bize iletebilirsin. Çözüm bulamadığını düşünüyorsan denetim makamlarına şikayette bulunma hakkına da sahipsin:
+        </p>
+        <ul class="legal-list">
+          <li><strong>Hollanda:</strong> Autoriteit Persoonsgegevens (AP) — <a href="https://autoriteitpersoonsgegevens.nl" target="_blank" rel="noopener noreferrer">autoriteitpersoonsgegevens.nl</a></li>
+          <li><strong>Türkiye:</strong> Kişisel Verileri Koruma Kurulu (KVKK) — <a href="https://kvkk.gov.tr" target="_blank" rel="noopener noreferrer">kvkk.gov.tr</a></li>
+        </ul>
+      </section>
+
+      <section class="qa">
+        <h2>10. Politika değişiklikleri</h2>
+        <p>
+          Bu politika zaman zaman güncellenebilir. Önemli değişiklikler yapıldığında bu sayfada en üstteki "Son güncelleme" tarihi değiştirilir. Düzenli olarak bu sayfayı kontrol etmen tavsiye edilir.
+        </p>
+      </section>
+
+      <section class="qa">
+        <h2>11. İletişim</h2>
+        <p>
+          Bu politika hakkında soruların veya verilerine ilişkin talepler için:
+        </p>
+        <p class="legal-block">
+          <a href="mailto:support@yildizna.me">support@yildizna.me</a><br />
+          <a href="mailto:destek@yildizna.me">destek@yildizna.me</a>
+        </p>
+      </section>
+
+      <aside class="content-cta">
+        <hr class="gold-rule" />
+        <p class="cta-prompt">Yıldıznameni oku, kaderini gör.</p>
+        <a href="/" class="btn-gold-outline">Yıldıznameni Oku →</a>
+      </aside>
+
+      <nav class="content-related" aria-label="İlgili sayfalar">
+        <p class="content-related-label">İlgili sayfalar</p>
+        <ul>
+          <li><a href="/kosullar">Hizmet Koşulları</a></li>
+          <li><a href="/yildizname">Yıldızname Nedir?</a></li>
+        </ul>
+      </nav>
+    </article>
+
+    <footer class="site-footer">
+      <p class="site-footer-legal">
+        <a href="/gizlilik">Gizlilik</a>
+        <span aria-hidden="true">·</span>
+        <a href="/kosullar">Koşullar</a>
+        <span aria-hidden="true">·</span>
+        <a href="/sss">SSS</a>
+        <span aria-hidden="true">·</span>
+        <a href="mailto:support@yildizna.me">İletişim</a>
+      </p>
+      <p class="site-footer-attribution">
+        yıldızna.me, Back of the Envelope B.V. tarafından sunulmaktadır.
+      </p>
+    </footer>
+
+    <script type="module" src="/js/page-init.js"></script>
+  </body>
+</html>

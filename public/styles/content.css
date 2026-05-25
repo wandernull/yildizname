@@ -221,3 +221,35 @@
   margin-bottom: 0.75rem !important;
   font-size: clamp(1.15rem, 2.6vw, 1.35rem) !important;
 }
+
+/* Extra primitives used by the legal pages (/gizlilik, /kosullar):
+   - .legal-meta — "Son güncelleme: ..." caption under the title
+   - .legal-block — indented block for addresses / company-id / contact details
+   - .legal-list — bulleted lists with comfortable spacing for clause lists */
+.legal-meta {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  color: rgba(232, 208, 138, 0.7);
+  text-transform: uppercase;
+}
+.legal-block {
+  margin: 0.5rem 0 1rem;
+  padding: 0.85rem 1rem;
+  border-left: 2px solid rgba(201, 168, 76, 0.45);
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 0 4px 4px 0;
+  font-size: 0.95em;
+  line-height: 1.7;
+}
+.legal-list {
+  margin: 0.5rem 0 1rem 1.25rem;
+  padding: 0;
+}
+.legal-list li {
+  margin-bottom: 0.5rem;
+  line-height: 1.65;
+}
+.legal-list li::marker {
+  color: rgba(201, 168, 76, 0.7);
+}
