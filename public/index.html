@@ -9,6 +9,33 @@
       name="description"
       content="Klasik yıldızname ve ilm-i hurûf geleneğinden, sana özel bir kader okuması."
     />
+    <link rel="canonical" href="https://yildizna.me/" />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Yıldızname — Yıldızların altında, harflerin diliyle" />
+    <meta
+      property="og:description"
+      content="Klasik yıldızname ve ilm-i hurûf geleneğinden, sana özel bir kader okuması."
+    />
+    <meta property="og:url" content="https://yildizna.me/" />
+    <meta property="og:locale" content="tr_TR" />
+    <meta property="og:site_name" content="yıldızna.me" />
+    <meta property="og:image" content="https://yildizna.me/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Yıldızna.me — altın hilâl ve ay altında bir yıldızname okuması" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Yıldızname" />
+    <meta
+      name="twitter:description"
+      content="Yıldızların altında, harflerin diliyle. Sana özel bir kader okuması."
+    />
+    <meta name="twitter:image" content="https://yildizna.me/og-image.png" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -160,6 +187,31 @@
         <div class="sticky-cta" aria-hidden="true">
           <button type="button" class="sticky-cta-trigger">Kalan 9 bölüm →</button>
         </div>
+
+        <!-- Post-payment success card. Lives inside the same overlay
+             that the polling spinner uses — we morph the spinner card
+             into this content once the webhook confirms the unlock, so
+             the dark backdrop stays continuous through the whole
+             "ödendi → onaylandı → açıldı" moment. The invoice link only
+             appears when the webhook successfully fetched it from
+             Stripe (otherwise the customer still has the email). -->
+        <template id="tpl-success-card">
+          <div class="post-payment-success">
+            <h2 class="post-payment-success-title">Mühür kırıldı</h2>
+            <p class="post-payment-success-body">
+              Yıldıznamenin tamamı açıldı. Aşağıda dokuz bölüm seni bekliyor — müneccim sesiyle dinleyebilirsin.
+            </p>
+            <a
+              class="btn-gold-fill post-payment-invoice"
+              target="_blank"
+              rel="noopener noreferrer"
+              hidden
+            >Faturayı İndir</a>
+            <button type="button" class="btn-gold-outline post-payment-dismiss">
+              Yıldıznameyi Oku
+            </button>
+          </div>
+        </template>
 
         <!-- Reveal modal: opened by the sticky CTA tap. Native <dialog>
              so we get backdrop, focus trap, and ESC-to-close for free. -->

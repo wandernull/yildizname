@@ -10,13 +10,16 @@
     "typecheck": "tsc --noEmit",
     "db:migrate:local": "wrangler d1 migrations apply yildizname-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply yildizname-db --remote",
-    "cf-typegen": "wrangler types"
+    "db:reset-paid": "wrangler d1 execute yildizname-db --local --file=scripts/reset-paid.sql",
+    "cf-typegen": "wrangler types",
+    "build:assets": "node scripts/build-assets.mjs"
   },
   "dependencies": {
     "hono": "^4.6.14"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.7.2",
     "wrangler": "^4.86.0"
   }

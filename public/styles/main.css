@@ -977,6 +977,109 @@ h4 {
   margin-top: 3rem;
   text-align: center;
 }
+
+/* Post-payment polling overlay — shown after Stripe redirects the user
+   back to /okuma/:id?paid=1 while the webhook flips the row in D1.
+   Full-screen scrim so the still-locked content underneath doesn't
+   distract. Vanishes once polling sees unlocked=1 (or after ~12s
+   timeout, after which we render a "still processing" inline card). */
+.post-payment-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 9, 16, 0.92);
+  backdrop-filter: blur(3px);
+  animation: post-payment-fadein 0.4s ease;
+}
+@keyframes post-payment-fadein {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.post-payment-card {
+  text-align: center;
+  padding: 2rem 1.5rem;
+  max-width: 380px;
+  width: calc(100% - 2.5rem);
+  display: grid;
+  justify-items: center;
+  gap: 1.25rem;
+}
+.post-payment-spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid rgba(201, 168, 76, 0.25);
+  border-top-color: var(--gold-light);
+  animation: post-payment-spin 1.1s linear infinite;
+}
+@keyframes post-payment-spin {
+  to { transform: rotate(360deg); }
+}
+.post-payment-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: clamp(1.3rem, 4vw, 1.6rem);
+  margin: 0;
+}
+.post-payment-body {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: rgba(184, 196, 212, 0.65);
+  font-size: 1rem;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+/* Overlay close animation — used when the user dismisses the success
+   card. Fades the whole scrim out before removing the node. */
+.post-payment-overlay.is-closing {
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+/* "Mühür kırıldı" success card — replaces the spinner card content
+   once the webhook confirms the unlock. The dark backdrop carries
+   through from polling to success, so the user experiences one
+   continuous "loading → confirmed" moment instead of two stacked
+   modals. */
+.post-payment-success {
+  text-align: center;
+  display: grid;
+  justify-items: center;
+  gap: 1.25rem;
+  max-width: 380px;
+  width: calc(100% - 2.5rem);
+}
+.post-payment-success-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.6rem, 5vw, 2rem);
+  color: var(--gold-light);
+  margin: 0;
+  letter-spacing: 0.015em;
+}
+.post-payment-success-body {
+  font-family: var(--font-body);
+  color: var(--silver);
+  line-height: 1.7;
+  font-size: 1rem;
+  margin: 0;
+}
+.post-payment-invoice,
+.post-payment-dismiss {
+  width: 100%;
+  margin: 0;
+}
+.post-payment-invoice {
+  text-decoration: none;
+}
+.post-payment-refresh {
+  width: 100%;
+  margin: 0;
+}
 .payment-note {
   margin-top: 0.75rem;
   font-size: 0.8rem;

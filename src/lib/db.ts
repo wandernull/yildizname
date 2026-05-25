@@ -13,6 +13,11 @@ interface ReadingRow {
   status: ReadingStatus;
   error: string | null;
   created_at: string;
+  stripe_session_id: string | null;
+  stripe_payment_intent_id: string | null;
+  paid_at: string | null;
+  invoice_hosted_url: string | null;
+  invoice_pdf_url: string | null;
 }
 
 function rowToReading(row: ReadingRow): Reading {
@@ -32,14 +37,17 @@ function rowToReading(row: ReadingRow): Reading {
     error: row.error,
     unlocked: row.unlocked === 1,
     createdAt: row.created_at,
+    stripeSessionId: row.stripe_session_id,
+    stripePaymentIntentId: row.stripe_payment_intent_id,
+    paidAt: row.paid_at,
+    invoiceHostedUrl: row.invoice_hosted_url,
+    invoicePdfUrl: row.invoice_pdf_url,
   };
 }
 
-// /api/generate is synchronous (see src/index.ts) so we just write the
-// finished row in one go. The status/error columns from migration 0002 are
-// retained for future use (e.g. a background-job consumer if we ever move
-// off Workers Free) but the synchronous path always writes status='done'
-// via the default — no need to set it explicitly.
+// /api/generate is synchronous so we write the finished row in one go.
+// status/error columns default to ('done', NULL); Stripe metadata columns
+// default to NULL (populated later by the webhook handler).
 export async function insertReading(
   db: D1Database,
   reading: { id: string; formData: FormData; sections: YildiznameSections; unlocked: boolean },
@@ -64,7 +72,9 @@ export async function getReading(
 ): Promise<Reading | null> {
   const row = await db
     .prepare(
-      `SELECT id, form_data, sections, unlocked, status, error, created_at
+      `SELECT id, form_data, sections, unlocked, status, error, created_at,
+              stripe_session_id, stripe_payment_intent_id, paid_at,
+              invoice_hosted_url, invoice_pdf_url
        FROM readings WHERE id = ?`,
     )
     .bind(id)
@@ -72,16 +82,57 @@ export async function getReading(
   return row ? rowToReading(row) : null;
 }
 
-export async function unlockReading(
+// Called from POST /api/unlock when we create a Stripe Checkout session —
+// pre-stores the session id so the webhook can correlate even if the
+// session.metadata.reading_id lookup somehow fails (defense in depth).
+export async function attachStripeSession(
   db: D1Database,
   id: string,
-): Promise<Reading | null> {
-  const res = await db
-    .prepare(`UPDATE readings SET unlocked = 1 WHERE id = ?`)
-    .bind(id)
+  sessionId: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE readings SET stripe_session_id = ? WHERE id = ?`)
+    .bind(sessionId, id)
     .run();
-  if (!res.success || (res.meta?.changes ?? 0) === 0) {
-    return null;
+}
+
+// Called from the webhook on checkout.session.completed. Idempotent — a
+// duplicate webhook delivery for the same reading is a no-op.
+export async function markReadingPaid(
+  db: D1Database,
+  id: string,
+  payment: {
+    sessionId: string;
+    paymentIntentId: string | null;
+    invoiceHostedUrl: string | null;
+    invoicePdfUrl: string | null;
+  },
+): Promise<Reading | null> {
+  const existing = await getReading(db, id);
+  if (!existing) return null;
+  if (existing.unlocked) {
+    // Already paid — no-op, return current state for the webhook's logs.
+    return existing;
   }
+  await db
+    .prepare(
+      `UPDATE readings
+         SET unlocked = 1,
+             stripe_session_id = ?,
+             stripe_payment_intent_id = ?,
+             paid_at = ?,
+             invoice_hosted_url = ?,
+             invoice_pdf_url = ?
+       WHERE id = ?`,
+    )
+    .bind(
+      payment.sessionId,
+      payment.paymentIntentId,
+      new Date().toISOString(),
+      payment.invoiceHostedUrl,
+      payment.invoicePdfUrl,
+      id,
+    )
+    .run();
   return getReading(db, id);
 }

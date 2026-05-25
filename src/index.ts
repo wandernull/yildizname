@@ -1,7 +1,16 @@
 import { Hono } from "hono";
-import { getReading, insertReading, unlockReading } from "./lib/db";
+import {
+  attachStripeSession,
+  getReading,
+  insertReading,
+  markReadingPaid,
+} from "./lib/db";
 import { generateYildizname } from "./lib/llm";
-import { defaultPaymentProvider } from "./lib/payment";
+import {
+  createCheckoutSession,
+  fetchInvoiceMetadata,
+  verifyStripeSignature,
+} from "./lib/stripe";
 import { fetchCachedAudio, synthesizeStream, ttsKey } from "./lib/tts";
 import {
   LOCKED_SECTION_KEYS,
@@ -116,44 +125,158 @@ app.get("/api/reading/:id", async (c) => {
     nazarAgirlik: sections.nazarAgirlik,
     saglik: sections.saglik,
     donumNoktalari: sections.donumNoktalari,
+    // Invoice URLs only present once the webhook has flipped the row to
+    // paid + fetched the invoice metadata from Stripe. Null-tolerant on
+    // the frontend (we just don't render the link when missing).
+    invoiceHostedUrl: reading.invoiceHostedUrl,
+    invoicePdfUrl: reading.invoicePdfUrl,
   });
 });
 
+// POST /api/unlock — creates a Stripe Checkout Session for the given
+// reading and returns the hosted Checkout URL. The frontend redirects
+// the user there. The actual unlock happens in the webhook handler
+// when Stripe sends `checkout.session.completed`.
+//
+// Idempotent on already-paid readings: returns `{ alreadyUnlocked: true }`
+// without creating a new session.
 app.post("/api/unlock", async (c) => {
   let body: unknown;
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ success: false, error: "Geçersiz istek." }, 400);
+    return c.json({ error: "Geçersiz istek." }, 400);
   }
   const id = (body as { id?: unknown })?.id;
   if (typeof id !== "string" || !id) {
-    return c.json({ success: false, error: "id gerekli." }, 400);
+    return c.json({ error: "id gerekli." }, 400);
   }
   const existing = await getReading(c.env.DB, id);
   if (!existing) {
-    return c.json({ success: false, error: "Okuma bulunamadı." }, 404);
+    return c.json({ error: "Okuma bulunamadı." }, 404);
   }
   if (existing.unlocked) {
-    return c.json({ success: true, transactionId: "already_unlocked" });
+    return c.json({ alreadyUnlocked: true });
   }
-  const provider = defaultPaymentProvider();
-  const result = await provider.charge({
-    readingId: id,
-    amount: Math.round(Number(c.env.READING_PRICE_TRY ?? "349.99") * 100),
-    currency: "TRY",
+
+  const amountKurus = Math.round(
+    Number(c.env.READING_PRICE_TRY ?? "349.99") * 100,
+  );
+  const origin = new URL(c.req.url).origin;
+
+  try {
+    const session = await createCheckoutSession(c.env, {
+      readingId: id,
+      origin,
+      amountKurus,
+    });
+    // Persist the session id so the webhook can correlate if the
+    // metadata lookup ever fails.
+    await attachStripeSession(c.env.DB, id, session.id);
+    return c.json({ url: session.url, sessionId: session.id });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Stripe hatası.";
+    console.error("[unlock] checkout session create failed", { id, msg });
+    return c.json({ error: "Ödeme başlatılamadı." }, 502);
+  }
+});
+
+// POST /api/stripe/webhook — Stripe posts here on every event. We verify
+// the signature, act only on `checkout.session.completed`, fetch the
+// invoice metadata, and flip the reading row to paid. Every other event
+// is acked with 200 so Stripe stops retrying.
+//
+// Local dev: run
+//   stripe listen --forward-to http://localhost:8787/api/stripe/webhook
+// then paste the printed `whsec_...` into .dev.vars as STRIPE_WEBHOOK_SECRET.
+app.post("/api/stripe/webhook", async (c) => {
+  if (!c.env.STRIPE_WEBHOOK_SECRET) {
+    return c.text("webhook secret missing", 500);
+  }
+  const signature = c.req.header("stripe-signature") ?? null;
+  if (!signature) {
+    return c.text("missing signature header", 400);
+  }
+  const rawBody = await c.req.text();
+
+  const ok = await verifyStripeSignature(
+    rawBody,
+    signature,
+    c.env.STRIPE_WEBHOOK_SECRET,
+  );
+  if (!ok) {
+    console.warn("[webhook] signature verification failed");
+    return c.text("invalid signature", 400);
+  }
+
+  let event: { type?: string; data?: { object?: Record<string, unknown> } };
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return c.text("invalid JSON", 400);
+  }
+
+  if (event.type !== "checkout.session.completed") {
+    return c.json({ ok: true, ignored: event.type });
+  }
+
+  const session = event.data?.object as
+    | {
+        id?: string;
+        metadata?: { reading_id?: string };
+        client_reference_id?: string;
+        payment_intent?: string | null;
+        invoice?: string | null;
+      }
+    | undefined;
+
+  const readingId =
+    session?.metadata?.reading_id ?? session?.client_reference_id ?? null;
+  if (!readingId) {
+    console.warn("[webhook] no reading_id on session", session?.id);
+    return c.json({ ok: true, warning: "no reading id" });
+  }
+
+  // Best-effort invoice lookup. If it fails we still unlock — the user
+  // gets their reading; only the "Faturayı indir" link is missing.
+  let invoiceMeta: { hostedUrl: string | null; pdfUrl: string | null } = {
+    hostedUrl: null,
+    pdfUrl: null,
+  };
+  if (session?.invoice) {
+    try {
+      const inv = await fetchInvoiceMetadata(c.env, session.invoice);
+      if (inv) {
+        invoiceMeta = { hostedUrl: inv.hostedUrl, pdfUrl: inv.pdfUrl };
+      }
+    } catch (err) {
+      console.warn("[webhook] invoice lookup threw", {
+        invoice: session.invoice,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const updated = await markReadingPaid(c.env.DB, readingId, {
+    sessionId: session?.id ?? "",
+    paymentIntentId: session?.payment_intent ?? null,
+    invoiceHostedUrl: invoiceMeta.hostedUrl,
+    invoicePdfUrl: invoiceMeta.pdfUrl,
   });
-  if (!result.success) {
-    return c.json(
-      { success: false, error: result.message ?? "Ödeme başarısız." },
-      402,
-    );
-  }
-  const updated = await unlockReading(c.env.DB, id);
+
   if (!updated) {
-    return c.json({ success: false, error: "Okuma açılamadı." }, 500);
+    console.warn("[webhook] reading not found", readingId);
+    // Still ack — TTL expiry or a deleted row. Don't make Stripe retry.
+    return c.json({ ok: true, warning: "reading not in D1" });
   }
-  return c.json({ success: true, transactionId: result.transactionId });
+
+  console.log("[webhook] reading unlocked", {
+    readingId,
+    sessionId: session?.id,
+    invoice: invoiceMeta.hostedUrl ? "yes" : "no",
+  });
+
+  return c.json({ ok: true });
 });
 
 // ----- TTS ------------------------------------------------------------------

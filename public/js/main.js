@@ -124,6 +124,10 @@ function render(fullPath) {
     } else {
       node = renderResult(router, {
         id,
+        // ?paid=1 lands here from Stripe's success_url after Checkout.
+        // ?unlocked=true is legacy from the pre-Stripe mock flow — kept
+        // tolerated so old test links still render correctly.
+        paidRedirect: searchParams.get("paid") === "1",
         unlockedQuery: searchParams.get("unlocked"),
       });
       setTitle("result");

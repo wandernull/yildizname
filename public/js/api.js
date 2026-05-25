@@ -32,7 +32,12 @@ export function fetchReading(id) {
   return jsonRequest(`/api/reading/${encodeURIComponent(id)}`);
 }
 
-export function unlockReading(id) {
+// Creates a Stripe Checkout Session server-side and returns the hosted
+// Checkout URL. The caller is responsible for redirecting the browser
+// to that URL. If the reading is already paid, the server returns
+// { alreadyUnlocked: true } with no `url` — the caller should treat that
+// as a no-op or refresh.
+export function startCheckout(id) {
   return jsonRequest("/api/unlock", {
     method: "POST",
     body: JSON.stringify({ id }),

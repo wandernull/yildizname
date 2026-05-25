@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" aria-label="yıldızna.me">
+  <!--
+    Master mark for yıldızna.me — a gold crescent moon on a deep
+    night-sky tile with rounded corners.
+    Served directly as /favicon.svg (modern browsers support SVG
+    favicons). Also the source for apple-touch-icon.png and
+    stripe-icon.png (built via scripts/build-assets.mjs).
+  -->
+  <defs>
+    <radialGradient id="favHalo" cx="55%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#fff5d6" stop-opacity="0.18"/>
+      <stop offset="55%" stop-color="#c9a84c" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#c9a84c" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="favMoonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8d08a"/>
+      <stop offset="100%" stop-color="#c9a84c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded dark tile -->
+  <rect width="256" height="256" rx="48" fill="#0a0e1a"/>
+
+  <!-- Subtle warm halo behind the moon -->
+  <circle cx="148" cy="118" r="120" fill="url(#favHalo)"/>
+
+  <!-- Crescent — same shape language as the moon on the result page,
+       scaled and centred for the icon frame. The two-arc construction
+       carves a crescent out of a larger disc. -->
+  <path
+    d="M 154 38 A 90 90 0 1 0 154 218 A 70 70 0 1 1 154 38 Z"
+    fill="url(#favMoonGrad)"
+  />
+</svg>

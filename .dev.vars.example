@@ -4,6 +4,10 @@
 ANTHROPIC_API_KEY="sk-ant-..."
 ELEVENLABS_API_KEY="sk_..."
 
-# Future:
-# STRIPE_SECRET_KEY="sk_test_..."
-# STRIPE_WEBHOOK_SECRET="whsec_..."
+# Stripe — use TEST keys (sk_test_*) for local dev; the production
+# Worker uses LIVE keys (sk_live_*) loaded via `wrangler secret put`.
+# Webhook secret comes from the `stripe listen` CLI command:
+#   stripe listen --forward-to http://localhost:8787/api/stripe/webhook
+# The CLI prints a `whsec_...` value once on start — paste it here.
+STRIPE_SECRET_KEY="sk_test_..."
+STRIPE_WEBHOOK_SECRET="whsec_..."

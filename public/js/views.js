@@ -985,20 +985,31 @@ const PRICE_LABEL = "349,99 ₺";
 const PAYMENT_CTA_LABEL = "Kaderinin tamamını aç →";
 
 // Shared unlock flow. Used by makePaymentBlock (inline gold-fill buttons)
-// AND the sticky-CTA reveal modal. Toggles loading/error state on the
-// passed button + optional error element; navigates to ?unlocked=true on
-// success.
+// AND the sticky-CTA reveal modal. Calls /api/unlock which now returns a
+// Stripe Checkout URL; the browser is redirected there. On Stripe success,
+// the redirect lands back on /okuma/:id?paid=1&session=... where
+// renderResult's post-payment polling handles the wait for the webhook.
+//
+// Idempotent on already-paid readings: server returns { alreadyUnlocked:
+// true } in which case we just refresh the page so the unlocked state
+// renders.
 async function performUnlock(id, router, btn, errEl, restoreLabel) {
   btn.disabled = true;
-  btn.textContent = "Kapı aralanıyor…";
+  btn.textContent = "Ödeme sayfasına yönlendiriliyor…";
   if (errEl) errEl.hidden = true;
   try {
-    const res = await api.unlockReading(id);
-    if (!res.success) throw new Error(res.error ?? "Ödeme başarısız.");
-    router.navigate(
-      `/okuma/${encodeURIComponent(id)}?unlocked=true`,
-      { replace: true },
-    );
+    const res = await api.startCheckout(id);
+    if (res.alreadyUnlocked) {
+      // Race condition: webhook fired between modal-open and CTA-click.
+      // Reload so the unlocked state renders.
+      router.navigate(`/okuma/${encodeURIComponent(id)}`, { replace: true });
+      return;
+    }
+    if (!res.url) throw new Error(res.error ?? "Ödeme başlatılamadı.");
+    // Hard redirect to Stripe Checkout. After payment, Stripe redirects
+    // back to /okuma/:id?paid=1&session=cs_... where the result page's
+    // own polling logic takes over.
+    window.location.assign(res.url);
   } catch (e) {
     if (errEl) {
       errEl.textContent = e.message || "Bilinmeyen hata.";
@@ -1112,14 +1123,52 @@ function makePaymentBlock() {
   return wrap;
 }
 
-export function renderResult(router, { id, unlockedQuery }) {
+// On Stripe redirect (?paid=1), the webhook may not have flipped the row
+// to unlocked yet. Poll every second for up to ~10s; bail out and render
+// whatever state we end up with at the end (probably still locked — at
+// which point we surface a friendly "still processing" message).
+const POST_PAYMENT_POLL_MS = 1000;
+const POST_PAYMENT_POLL_MAX_ATTEMPTS = 12; // 12 × 1s = 12 seconds total
+
+async function fetchReadingMaybePolling(id, expectUnlocked) {
+  if (!expectUnlocked) return api.fetchReading(id);
+
+  for (let attempt = 0; attempt < POST_PAYMENT_POLL_MAX_ATTEMPTS; attempt++) {
+    const data = await api.fetchReading(id).catch(() => null);
+    if (data && data.unlocked) return data;
+    await new Promise((r) => setTimeout(r, POST_PAYMENT_POLL_MS));
+  }
+  // Last attempt — return whatever we get even if still locked. The UI
+  // will show a "still processing" hint in that case.
+  return api.fetchReading(id);
+}
+
+export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
   const root = tpl("tpl-result");
   const kapakSozuEl = root.querySelector(".kapak-sozu");
   const sectionsHost = root.querySelector(".sections-host");
   const postActions = root.querySelector(".post-actions");
 
+  // Post-payment polling overlay — only shown when ?paid=1 is in the URL.
+  // The user is staring at this for up to ~10 seconds while the webhook
+  // flips the row in D1. Without it the page would render the locked
+  // state for a few seconds, which would be confusing right after paying.
+  let pollingOverlay = null;
+  if (paidRedirect) {
+    pollingOverlay = document.createElement("div");
+    pollingOverlay.className = "post-payment-overlay";
+    pollingOverlay.innerHTML = `
+      <div class="post-payment-card">
+        <div class="post-payment-spinner" aria-hidden="true"></div>
+        <p class="post-payment-title shimmer-gold">Ödemen onaylandı.</p>
+        <p class="post-payment-body">Yıldıznamen açılıyor — bir an…</p>
+      </div>
+    `;
+    root.appendChild(pollingOverlay);
+  }
+
   // initial placeholder while we fetch
-  kapakSozuEl.textContent = "Okuma açılıyor…";
+  kapakSozuEl.textContent = paidRedirect ? "Mühür kırılıyor…" : "Okuma açılıyor…";
 
   // Track every disposable (per-section audio + the chain-play audio) so we
   // can stop them all if the user navigates away.
@@ -1161,8 +1210,81 @@ export function renderResult(router, { id, unlockedQuery }) {
 
   (async () => {
     try {
-      const data = await api.fetchReading(id);
+      const data = await fetchReadingMaybePolling(id, paidRedirect);
       const isUnlocked = Boolean(data.unlocked || unlockedQuery === "true");
+
+      // Clean up the ?paid=1 from the URL so refreshing the page doesn't
+      // re-trigger the polling overlay. Use replaceState so it doesn't
+      // create a back-button entry.
+      if (paidRedirect) {
+        try {
+          window.history.replaceState(
+            {},
+            "",
+            `/okuma/${encodeURIComponent(id)}`,
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // Edge case: ?paid=1 but the webhook didn't fire within the poll
+      // window. Replace the polling card with a polite "still processing"
+      // message — user can refresh manually. Almost never happens in
+      // practice; webhooks usually beat the 12-second poll window.
+      if (paidRedirect && !isUnlocked) {
+        if (pollingOverlay) {
+          const card = pollingOverlay.querySelector(".post-payment-card");
+          if (card) {
+            card.innerHTML = `
+              <p class="post-payment-success-title">Ödemen alındı — yıldıznamen birazdan açılır.</p>
+              <p class="post-payment-success-body">Birkaç saniye sonra sayfayı yenilemen yeterli.</p>
+              <button type="button" class="btn-gold-outline post-payment-refresh">Yenile</button>
+            `;
+            const refreshBtn = card.querySelector(".post-payment-refresh");
+            if (refreshBtn) {
+              refreshBtn.addEventListener("click", () => window.location.reload());
+            }
+          }
+        }
+        return;
+      }
+
+      // Happy paid-redirect path: morph the polling card into a
+      // "Mühür kırıldı" success card with the invoice link (when the
+      // webhook successfully fetched it from Stripe). User dismisses
+      // the modal and the underlying unlocked reading is already
+      // there. The post-actions row gets no permanent invoice button —
+      // the modal IS the invoice handoff.
+      if (paidRedirect && isUnlocked && pollingOverlay) {
+        const card = pollingOverlay.querySelector(".post-payment-card");
+        const tpl = document.getElementById("tpl-success-card");
+        if (card && tpl) {
+          card.replaceChildren(tpl.content.firstElementChild.cloneNode(true));
+          const successCard = card.querySelector(".post-payment-success");
+          const invoiceLink = successCard.querySelector(".post-payment-invoice");
+          const dismissBtn = successCard.querySelector(".post-payment-dismiss");
+          const invoiceUrl = data.invoiceHostedUrl || data.invoicePdfUrl;
+          if (invoiceUrl) {
+            invoiceLink.href = invoiceUrl;
+            invoiceLink.hidden = false;
+          }
+          const closeOverlay = () => {
+            pollingOverlay.classList.add("is-closing");
+            window.setTimeout(() => {
+              pollingOverlay?.remove();
+              pollingOverlay = null;
+            }, 400);
+          };
+          dismissBtn.addEventListener("click", closeOverlay);
+        }
+      } else if (pollingOverlay) {
+        // Non-paid-redirect renders that somehow still have an overlay
+        // (shouldn't happen but defensive). Just tear it down.
+        pollingOverlay.remove();
+        pollingOverlay = null;
+      }
+
       kapakSozuEl.textContent = data.kapakSozu;
 
       sectionsHost.replaceChildren();

@@ -63,6 +63,13 @@ export interface Reading {
   error: string | null;
   unlocked: boolean;
   createdAt: string;
+  // Stripe payment metadata, populated by the webhook after a successful
+  // checkout.session.completed event. Null in the pre-paid state.
+  stripeSessionId: string | null;
+  stripePaymentIntentId: string | null;
+  paidAt: string | null;
+  invoiceHostedUrl: string | null;
+  invoicePdfUrl: string | null;
 }
 
 // Worker bindings, declared via wrangler.toml. The wrangler types generator
@@ -77,4 +84,6 @@ export interface Env {
   ELEVENLABS_VOICE_ID: string;
   ELEVENLABS_MODEL_ID: string;
   READING_PRICE_TRY: string;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
 }
