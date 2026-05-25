@@ -11,6 +11,7 @@
     "db:migrate:local": "wrangler d1 migrations apply yildizname-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply yildizname-db --remote",
     "db:reset-paid": "wrangler d1 execute yildizname-db --local --file=scripts/reset-paid.sql",
+    "db:reset-paid:one": "bash scripts/reset-paid-one.sh",
     "cf-typegen": "wrangler types",
     "build:assets": "node scripts/build-assets.mjs"
   },

@@ -12,6 +12,33 @@ const PRODUCT_NAME = "Yıldızname — Tam Okuma";
 const PRODUCT_DESCRIPTION =
   "Kişiye özel yıldızname okuması — 10 bölüm yazılı içerik ve müneccim sesiyle sesli okuma.";
 
+// Brand-and-entity attribution. Used in two places:
+//   1. Below the Pay button on the Stripe Checkout page (Stripe's only
+//      sanctioned spot for custom copy on Checkout).
+//   2. As the first line of the auto-generated invoice footer (see
+//      INVOICE_FOOTER below).
+// Helps the customer connect the yıldızna.me brand to the legal entity
+// that will appear on their card statement and at the bottom of their
+// invoice PDF. Turkish-only for now — once i18n lands, plumb the
+// locale-matched string through here per-session instead of hard-coding;
+// both surfaces will pick up the new value automatically.
+const BRAND_ATTRIBUTION =
+  "Yıldızna.me, Back of the Envelope B.V. tarafından sunulmaktadır.";
+
+// Dutch tax identifiers shown on the invoice footer.
+//   KVK = Dutch chamber of commerce registration number.
+//   VAT = EU VAT registration number (NL + numeric body + check digits).
+// Required on invoices for VAT-registered EU businesses. If these ever
+// change (rebrand, restructure, move jurisdictions), update here.
+const KVK_NUMBER = "97838810";
+const VAT_NUMBER = "NL868254010B01";
+
+const INVOICE_FOOTER = [
+  BRAND_ATTRIBUTION,
+  `KVK: ${KVK_NUMBER}`,
+  `VAT: ${VAT_NUMBER}`,
+].join("\n");
+
 // General "digital service" tax classification. When Stripe Tax is enabled
 // in the account dashboard, this code drives the per-jurisdiction VAT rate
 // lookup. If Stripe Tax is OFF in the dashboard, this is ignored.
@@ -76,6 +103,9 @@ export async function createCheckoutSession(
   // server-side `discounts[]`, which we don't use.
   params.append("allow_promotion_codes", "true");
 
+  // Brand attribution below the Pay button (see BRAND_ATTRIBUTION above).
+  params.append("custom_text[submit][message]", BRAND_ATTRIBUTION);
+
   // Auto-generate a proper VAT-style invoice (sequential number, PDF,
   // hosted invoice page) and email it to the customer in tr-TR. The
   // webhook handler fetches the resulting invoice and persists the URLs
@@ -85,10 +115,15 @@ export async function createCheckoutSession(
     "invoice_creation[invoice_data][description]",
     "Yıldızname tam okuma — kişiye özel dijital içerik.",
   );
-  params.append(
-    "invoice_creation[invoice_data][footer]",
-    "yildizna.me — sorularınız için iletişime geçebilirsiniz.",
-  );
+  // Brand attribution + Dutch tax identifiers on the invoice footer (see
+  // INVOICE_FOOTER above). Lives in code (not Dashboard) because
+  // invoice_creation[invoice_data][footer] passed at session creation
+  // OVERRIDES the Dashboard default — anything set in Dashboard →
+  // Settings → Billing → Invoices is ignored when this param is present.
+  // Version-controlled here so test and live invoices match, the footer
+  // can't get accidentally cleared from the Dashboard, and i18n can swap
+  // BRAND_ATTRIBUTION at the same time as the Checkout-page string.
+  params.append("invoice_creation[invoice_data][footer]", INVOICE_FOOTER);
 
   const successUrl =
     `${args.origin}/okuma/${encodeURIComponent(args.readingId)}` +
