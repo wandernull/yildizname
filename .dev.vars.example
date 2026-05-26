@@ -11,3 +11,9 @@ ELEVENLABS_API_KEY="sk_..."
 # The CLI prints a `whsec_...` value once on start — paste it here.
 STRIPE_SECRET_KEY="sk_test_..."
 STRIPE_WEBHOOK_SECRET="whsec_..."
+
+# HTTP Basic Auth credentials for the /admin backoffice (analytics
+# dashboard at https://yildizna.me/admin). For production, set via
+# `npx wrangler secret put ADMIN_USER` and `npx wrangler secret put ADMIN_PASS`.
+ADMIN_USER="admin"
+ADMIN_PASS="change-me-locally"

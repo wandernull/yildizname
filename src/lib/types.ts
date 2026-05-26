@@ -55,6 +55,20 @@ export const LOCKED_SECTION_KEYS: SectionKey[] = [
 
 export type ReadingStatus = "pending" | "done" | "error";
 
+// Funnel-event keys accepted by POST /api/track/:id. Kept in sync with
+// the column names in migration 0004; each one maps to one boolean flag
+// on the reading row. The flags are idempotent — once a flag is set,
+// repeated tracking calls are no-ops. Used by the /admin backoffice to
+// compute funnel conversion rates.
+export const TRACK_EVENTS = [
+  "scrolled_past_free",
+  "listened_free",
+  "listened_locked",
+  "listened_chain",
+  "clicked_unlock",
+] as const;
+export type TrackEvent = (typeof TRACK_EVENTS)[number];
+
 export interface Reading {
   id: string;
   formData: FormData;
@@ -70,6 +84,15 @@ export interface Reading {
   paidAt: string | null;
   invoiceHostedUrl: string | null;
   invoicePdfUrl: string | null;
+  // Funnel-analytics fields (migration 0004). Populated by the server on
+  // first read (viewer_ip) and by POST /api/track/:id (the event flags).
+  viewerIp: string | null;
+  scrolledPastFree: boolean;
+  listenedFree: boolean;
+  listenedLocked: boolean;
+  listenedChain: boolean;
+  clickedUnlock: boolean;
+  clickedUnlockAt: string | null;
 }
 
 // Worker bindings, declared via wrangler.toml. The wrangler types generator
@@ -86,4 +109,9 @@ export interface Env {
   READING_PRICE_TRY: string;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
+  // HTTP Basic Auth credentials for the /admin backoffice. Set via
+  // `npx wrangler secret put ADMIN_USER` and `npx wrangler secret put
+  // ADMIN_PASS`. Locally, put them in .dev.vars.
+  ADMIN_USER: string;
+  ADMIN_PASS: string;
 }

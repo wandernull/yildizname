@@ -751,6 +751,12 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
   playBtn.addEventListener("click", () => {
     playBtn.classList.remove("pulse");
     if (audio.paused) {
+      // Funnel tracking — fire only on play (start), not pause/resume.
+      // The free section is `karakterinOzu`; everything else is locked.
+      api.trackEvent(
+        readingId,
+        sectionKey === "karakterinOzu" ? "listened_free" : "listened_locked",
+      );
       const p = audio.play();
       if (p && typeof p.then === "function") p.catch(() => setUiIdle());
     } else {
@@ -994,6 +1000,10 @@ const PAYMENT_CTA_LABEL = "Kaderinin tamamını aç →";
 // true } in which case we just refresh the page so the unlocked state
 // renders.
 async function performUnlock(id, router, btn, errEl, restoreLabel) {
+  // Funnel tracking — fire-and-forget. `keepalive: true` on the fetch
+  // ensures the request lands even though we're about to navigate away
+  // to Stripe Checkout. Doesn't block the unlock flow on failure.
+  api.trackEvent(id, "clicked_unlock");
   btn.disabled = true;
   btn.textContent = "Ödeme sayfasına yönlendiriliyor…";
   if (errEl) errEl.hidden = true;
@@ -1188,6 +1198,21 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
   root.addEventListener("view:cleanup", () => {
     for (const d of disposables) d();
   });
+
+  // Funnel tracking — fires once when the user scrolls beyond a threshold
+  // that suggests real engagement with content below the fold (past the
+  // free section header on most devices). Single-fire then unbinds, so
+  // no perf hit beyond the brief pre-threshold period. `keepalive` on
+  // the fetch ensures the event survives a navigation away.
+  const SCROLL_THRESHOLD_PX = 200;
+  const onScroll = () => {
+    if (window.scrollY > SCROLL_THRESHOLD_PX) {
+      api.trackEvent(id, "scrolled_past_free");
+      window.removeEventListener("scroll", onScroll);
+    }
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  disposables.push(() => window.removeEventListener("scroll", onScroll));
 
   // Consume the journey flag exactly once. Set in renderLoading right before
   // /result navigation; absent on refreshes, shared links, back-button.
@@ -1407,6 +1432,13 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
             listenBtn.textContent = "Baştan Sona Dinle";
             return;
           }
+          // Funnel tracking — fire only on the start of a chain play,
+          // not on pause/stop. Per-section listened_locked flags will
+          // also fire as the chain advances through locked sections,
+          // since each section playback flows through makeAudioPlayer.
+          // (Not quite — chainAudio is a separate element. But the
+          // chain bucket is its own signal anyway.)
+          api.trackEvent(id, "listened_chain");
           chainActive = true;
           queueIdx = 0;
           chainAudio.src = api.ttsUrl(id, queue[queueIdx]);

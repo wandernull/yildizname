@@ -1,8 +1,11 @@
 import { Hono } from "hono";
 import {
   attachStripeSession,
+  captureViewerIp,
   getReading,
   insertReading,
+  listReadingsForAdmin,
+  markEvent,
   markReadingPaid,
 } from "./lib/db";
 import { generateYildizname } from "./lib/llm";
@@ -15,9 +18,12 @@ import {
 import { fetchCachedAudio, synthesizeStream, ttsKey } from "./lib/tts";
 import {
   LOCKED_SECTION_KEYS,
+  TRACK_EVENTS,
   type Env,
   type FormData,
+  type Reading,
   type SectionKey,
+  type TrackEvent,
 } from "./lib/types";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -102,6 +108,19 @@ app.get("/api/reading/:id", async (c) => {
   if (!reading) {
     return c.json({ error: "Okuma bulunamadı." }, 404);
   }
+  // Funnel analytics: capture the viewer's IP on the first read of this
+  // reading. captureViewerIp only writes if the column is still NULL, so
+  // this is a no-op on subsequent reads (or from a different IP for the
+  // same reading). Fire-and-forget — don't await this and don't break
+  // the request if it fails.
+  const ip = c.req.header("cf-connecting-ip") ?? c.req.header("x-forwarded-for") ?? null;
+  if (ip && !reading.viewerIp) {
+    c.executionCtx.waitUntil(
+      captureViewerIp(c.env.DB, id, ip).catch((err) => {
+        console.warn("[reading] viewer_ip capture failed", { id, err });
+      }),
+    );
+  }
   const sections = reading.sections;
   if (!sections) {
     return c.json({ error: "Okuma boş döndü." }, 500);
@@ -132,6 +151,36 @@ app.get("/api/reading/:id", async (c) => {
     invoiceHostedUrl: reading.invoiceHostedUrl,
     invoicePdfUrl: reading.invoicePdfUrl,
   });
+});
+
+// POST /api/track/:id — funnel analytics. The frontend fires this on
+// scroll-past-free, listen-button clicks, and unlock-CTA clicks. Each
+// event maps to one boolean flag on the reading row (migration 0004).
+// Idempotent — repeated events for the same reading are no-ops.
+// Best-effort: a failure here never breaks the user's reading flow,
+// so the frontend fires these fire-and-forget without awaiting.
+app.post("/api/track/:id", async (c) => {
+  const id = c.req.param("id");
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Geçersiz istek." }, 400);
+  }
+  const event = (body as { event?: unknown })?.event;
+  if (typeof event !== "string" || !TRACK_EVENTS.includes(event as TrackEvent)) {
+    return c.json({ error: "Bilinmeyen olay." }, 400);
+  }
+  // No 404 check on reading existence — saves a DB roundtrip per event.
+  // If the id doesn't exist, the UPDATE just affects 0 rows. We trade
+  // input-validation strictness for tracking throughput.
+  try {
+    await markEvent(c.env.DB, id, event as TrackEvent);
+    return c.json({ ok: true });
+  } catch (err) {
+    console.warn("[track] mark event failed", { id, event, err });
+    return c.json({ ok: false }, 500);
+  }
 });
 
 // POST /api/unlock — creates a Stripe Checkout Session for the given
@@ -386,6 +435,194 @@ const LEGAL_ALIASES: Record<string, string> = {
 for (const [from, to] of Object.entries(LEGAL_ALIASES)) {
   app.get(from, (c) => c.redirect(to, 301));
 }
+
+// ----- /admin backoffice ---------------------------------------------------
+// HTTP Basic Auth guarded analytics dashboard. ADMIN_USER + ADMIN_PASS
+// live in Worker secrets (and .dev.vars for local). The browser pops
+// up its native credentials dialog on first request and remembers the
+// answer for the session. To "log out", close all tabs to this origin.
+//
+// Why Basic Auth: zero session code, no cookies, no KV. This is a
+// single-person admin tool; we don't need a polished login UI.
+
+function checkBasicAuth(c: { req: { header: (n: string) => string | undefined } }, env: Env): boolean {
+  // Guard: if admin credentials aren't configured, deny all access and
+  // log a warning so the operator notices. Most common cause locally:
+  // forgot to add ADMIN_USER / ADMIN_PASS to .dev.vars. In production
+  // this means `wrangler secret put ADMIN_USER` / `ADMIN_PASS` wasn't run.
+  if (!env.ADMIN_USER || !env.ADMIN_PASS) {
+    console.warn("[admin] ADMIN_USER or ADMIN_PASS not set — denying /admin access");
+    return false;
+  }
+  const header = c.req.header("authorization");
+  if (!header || !header.toLowerCase().startsWith("basic ")) return false;
+  let decoded: string;
+  try {
+    decoded = atob(header.slice(6).trim());
+  } catch {
+    return false;
+  }
+  const idx = decoded.indexOf(":");
+  if (idx < 0) return false;
+  const user = decoded.slice(0, idx);
+  const pass = decoded.slice(idx + 1);
+  // Constant-time compare to deter timing-based password discovery.
+  // The credentials are short enough that the practical risk is low
+  // but it's three extra lines; cheap.
+  if (user.length !== env.ADMIN_USER.length || pass.length !== env.ADMIN_PASS.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < user.length; i++) diff |= user.charCodeAt(i) ^ env.ADMIN_USER.charCodeAt(i);
+  for (let i = 0; i < pass.length; i++) diff |= pass.charCodeAt(i) ^ env.ADMIN_PASS.charCodeAt(i);
+  return diff === 0;
+}
+
+function unauthorized(): Response {
+  return new Response("Unauthorized", {
+    status: 401,
+    headers: {
+      "WWW-Authenticate": 'Basic realm="yildizna.me admin", charset="UTF-8"',
+    },
+  });
+}
+
+// Tiny HTML escape — sufficient for the four reserved chars that could
+// break out of attribute values or text content. We're rendering names,
+// places, dates — no rich content. Don't use this on URLs (would
+// double-encode &amp;).
+function esc(s: string | null | undefined): string {
+  if (s == null) return "";
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+const CHECK = "✓";
+const DASH = "·";
+
+function renderAdminPage(readings: Reading[]): string {
+  const total = readings.length;
+  const scrolled = readings.filter((r) => r.scrolledPastFree).length;
+  const listenedFree = readings.filter((r) => r.listenedFree).length;
+  const listenedLocked = readings.filter((r) => r.listenedLocked).length;
+  const clickedUnlock = readings.filter((r) => r.clickedUnlock).length;
+  const paid = readings.filter((r) => r.unlocked).length;
+  const pct = (n: number) => (total === 0 ? "—" : `${Math.round((n / total) * 100)}%`);
+
+  const rows = readings
+    .map((r) => {
+      const f = r.formData;
+      const created = r.createdAt.replace("T", " ").slice(0, 19);
+      return `<tr>
+  <td class="when">${esc(created)}</td>
+  <td class="ip">${esc(r.viewerIp ?? "—")}</td>
+  <td class="who">
+    <strong>${esc(f.name)}</strong><br />
+    <span class="dim">anne: ${esc(f.motherName)}</span>
+  </td>
+  <td class="when2">
+    ${esc(f.birthDate)}<br />
+    <span class="dim">${esc(f.birthPlace)}</span>
+  </td>
+  <td class="flag">${r.scrolledPastFree ? CHECK : DASH}</td>
+  <td class="flag">${r.listenedFree ? CHECK : DASH}</td>
+  <td class="flag">${r.listenedLocked ? CHECK : DASH}</td>
+  <td class="flag">${r.listenedChain ? CHECK : DASH}</td>
+  <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
+  <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
+  <td class="id"><a href="/okuma/${esc(r.id)}" target="_blank">aç →</a></td>
+</tr>`;
+    })
+    .join("\n");
+
+  return `<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>yıldızna.me admin — okuma istatistikleri</title>
+  <style>
+    :root {
+      --bg: #0a0e1a; --fg: #e8e4d8; --dim: #8892a3; --gold: #c9a84c;
+      --paid: #4ade80; --row: rgba(255,255,255,0.02); --row2: rgba(255,255,255,0.04);
+      --border: rgba(201,168,76,0.18);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 2rem; background: var(--bg); color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px; line-height: 1.5;
+    }
+    h1 { margin: 0 0 0.4rem; font-size: 1.4rem; color: var(--gold); font-weight: 600; }
+    .meta { color: var(--dim); margin-bottom: 1.6rem; font-size: 0.85rem; }
+    .stats { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 2rem; }
+    .stat { background: var(--row2); border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem 1rem; }
+    .stat-label { color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
+    .stat-value { font-size: 1.5rem; color: var(--gold); font-weight: 600; }
+    .stat-pct { font-size: 0.85rem; color: var(--dim); margin-left: 0.4rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border); color: var(--gold); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; position: sticky; top: 0; background: var(--bg); }
+    td { padding: 0.75rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+    tr:nth-child(even) td { background: var(--row); }
+    .flag { text-align: center; font-size: 1.1rem; color: var(--dim); }
+    .flag.paid { color: var(--paid); font-weight: 700; }
+    td.when, td.when2 { color: var(--dim); font-size: 0.78rem; white-space: nowrap; }
+    td.who strong { color: var(--fg); }
+    td.who .dim, td.when2 .dim { color: var(--dim); font-size: 0.78rem; }
+    td.ip { color: var(--dim); font-family: ui-monospace, monospace; font-size: 0.78rem; }
+    td.id a { color: var(--gold); text-decoration: none; font-size: 0.78rem; }
+    td.id a:hover { text-decoration: underline; }
+    .empty { padding: 3rem 0; text-align: center; color: var(--dim); font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>yıldızna.me — okuma istatistikleri</h1>
+  <p class="meta">Son ${esc(String(total))} okuma. Yenilemek için sayfayı yenile.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Toplam</div><div class="stat-value">${esc(String(total))}</div></div>
+    <div class="stat"><div class="stat-label">Aşağı kaydırdı</div><div class="stat-value">${esc(String(scrolled))}<span class="stat-pct">${pct(scrolled)}</span></div></div>
+    <div class="stat"><div class="stat-label">Karakteri dinledi</div><div class="stat-value">${esc(String(listenedFree))}<span class="stat-pct">${pct(listenedFree)}</span></div></div>
+    <div class="stat"><div class="stat-label">Kilitli dinledi</div><div class="stat-value">${esc(String(listenedLocked))}<span class="stat-pct">${pct(listenedLocked)}</span></div></div>
+    <div class="stat"><div class="stat-label">"Mührü kır" tıkladı</div><div class="stat-value">${esc(String(clickedUnlock))}<span class="stat-pct">${pct(clickedUnlock)}</span></div></div>
+    <div class="stat"><div class="stat-label">Ödedi</div><div class="stat-value">${esc(String(paid))}<span class="stat-pct">${pct(paid)}</span></div></div>
+  </div>
+
+  ${total === 0
+    ? `<div class="empty">Henüz okuma yok.</div>`
+    : `<table>
+    <thead>
+      <tr>
+        <th>Zaman</th>
+        <th>IP</th>
+        <th>Kim</th>
+        <th>Doğum</th>
+        <th>Scroll</th>
+        <th>Dinle: Karakter</th>
+        <th>Dinle: Kilitli</th>
+        <th>Dinle: Hepsi</th>
+        <th>Mührü kır</th>
+        <th>Ödedi</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>`}
+</body>
+</html>`;
+}
+
+app.get("/admin", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const readings = await listReadingsForAdmin(c.env.DB);
+  return c.html(renderAdminPage(readings));
+});
 
 // ----- SPA fallback ---------------------------------------------------------
 app.notFound(async (c) => {
