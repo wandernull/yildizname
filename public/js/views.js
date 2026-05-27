@@ -744,8 +744,13 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
   });
   audio.addEventListener("ended", () => setUiIdle());
   audio.addEventListener("error", () => {
+    // TTS pipeline failure (server-side 5xx, ElevenLabs upstream down,
+    // quota exhausted, network blip, etc.). Stay in-voice — surface the
+    // müneccim-anthropomorphism, no technical disclosure. Mirrors the
+    // server-side error string in src/index.ts. The retry CTA suggests
+    // transience without committing to a timeline.
     playBtn.classList.remove("loading", "pulse");
-    setUiIdle("Ses gelmedi. Tekrar dener misin?");
+    setUiIdle("Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.");
   });
 
   playBtn.addEventListener("click", () => {
@@ -1440,8 +1445,19 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         };
         chainAudio.addEventListener("ended", onEndedAdvance);
         chainAudio.addEventListener("error", () => {
+          // TTS pipeline failure during chain playback. Surface the same
+          // in-voice copy as the per-section player, briefly hijacking the
+          // button label since there's no inline status slot here. Disable
+          // the button for a few seconds so the user reads the message
+          // instead of immediately re-clicking on the now-default label.
           chainActive = false;
-          listenBtn.textContent = "Baştan Sona Dinle";
+          listenBtn.textContent =
+            "Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.";
+          listenBtn.disabled = true;
+          window.setTimeout(() => {
+            listenBtn.textContent = "Baştan Sona Dinle";
+            listenBtn.disabled = false;
+          }, 4000);
         });
 
         listenBtn.addEventListener("click", () => {
