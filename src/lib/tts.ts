@@ -1,23 +1,48 @@
+import { splitKarakterinOzu } from "./text";
 import type { Env, SectionKey, YildiznameSections } from "./types";
 
 // On-demand TTS via ElevenLabs streaming API, cached in R2 for 15 days.
 //
-// One object per (readingId, section) at key `tts/{readingId}/{section}.mp3`.
-// The R2 bucket has a 15-day lifecycle rule set out-of-band, so we don't
-// need to do age checks on read — anything still in the bucket is fresh.
+// One object per (readingId, section) at key `tts/{prefix}/{readingId}/
+// {section}.mp3`. The R2 bucket has a 15-day lifecycle rule set out-of-band,
+// so we don't need to do age checks on read — anything still in the bucket
+// is fresh.
 //
-// karakterinOzu is special: at synth time we prepend the kapakSözü so the
-// first words the user ever hears are the literary mısra. This shaping only
-// happens here, not in D1 — the stored section text stays clean.
+// karakterinOzu is special — split across two audio files to avoid
+// double-paying ElevenLabs on the free→paid conversion:
+//   "karakterinOzu"     → kapakSözü + 1/3 PREVIEW of karakterinOzu text.
+//                          Served on free-state autoplay and the per-section
+//                          Dinle button before unlock. Cheap to synthesise.
+//   "karakterinOzuRest" → ONLY the remaining 2/3 of karakterinOzu, no
+//                          kapakSözü prepend (it's already at the start of
+//                          the preview audio). Served only after unlock.
+//                          The client plays preview + rest back-to-back as
+//                          one logical track for paid playback — no
+//                          re-synthesis of the preview portion, so per
+//                          converted reading total spend is preview (1/3)
+//                          + rest (2/3) = 1.0× full text, identical to the
+//                          old single-synthesis flow but spread across the
+//                          free→paid funnel.
+//
+// TtsSection extends SectionKey with the virtual "karakterinOzuRest" key.
+// Not a YildiznameSections field — it's a TTS-layer derivation only. The
+// shaping happens here at synth time, not in D1 — D1 always holds the full
+// original text.
+
+export type TtsSection = SectionKey | "karakterinOzuRest";
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 
 // Bump this when buildSpeechText() changes in a way that meaningfully alters
 // the audio output (different prosody pre-processing, different prompt
-// shaping, etc). Old objects under earlier prefixes get garbage-collected by
-// the bucket's 15-day lifecycle rule, and the next listener triggers a fresh
-// synthesis under the new prefix.
-const TTS_CACHE_PREFIX = "tts/v2";
+// shaping, different text content for a given section key, etc). Old objects
+// under earlier prefixes get garbage-collected by the bucket's 15-day
+// lifecycle rule, and the next listener triggers a fresh synthesis under the
+// new prefix.
+//   v2 → v3: karakterinOzu changed from "full audio" to "preview audio";
+//            karakterinOzuRest introduced for the post-unlock 2/3, which
+//            the client plays back-to-back after the preview.
+const TTS_CACHE_PREFIX = "tts/v3";
 
 const VOICE_SETTINGS = {
   stability: 0.6,
@@ -31,13 +56,21 @@ const VOICE_SETTINGS = {
 // under a second; anything past 30s here means the connection is sick.
 const HEADERS_TIMEOUT_MS = 30_000;
 
-export function ttsKey(readingId: string, section: SectionKey): string {
+export function ttsKey(readingId: string, section: TtsSection): string {
   return `${TTS_CACHE_PREFIX}/${readingId}/${section}.mp3`;
 }
 
 // Shape the text for prosody-friendly speech. Three passes:
-//   1. Optionally prepend kapakSözü (only for karakterinOzu) so the autoplay's
-//      first words are the literary mısra.
+//   1. Resolve which text body to read based on the (virtual) section key:
+//        karakterinOzu     → kapakSözü + 1/3 preview of karakterinOzu
+//        karakterinOzuRest → JUST the 2/3 remainder (no kapakSözü prepend,
+//                            it's already in the preview audio that plays
+//                            immediately before this clip)
+//        anything else     → just sections[section]
+//      buildKarakterinOzuRestText returns "" when the text was too short
+//      to split (preview already covers the whole thing). The TTS endpoint
+//      detects that and returns 404 so the client can skip the rest item
+//      in its play queue cleanly.
 //   2. Strip numerology parentheticals — the müneccim prompt deliberately
 //      invokes ebced math and the model loves to show its work in parens
 //      like "(1+9+8+9=27, 2+7=9)". ElevenLabs reads that as "one plus nine
@@ -48,12 +81,20 @@ export function ttsKey(readingId: string, section: SectionKey): string {
 //      through untouched.
 //   3. Insert em-dashes after sentence terminators for slower prosody.
 function buildSpeechText(
-  section: SectionKey,
+  section: TtsSection,
   sections: YildiznameSections,
 ): string {
-  let text = sections[section];
-  if (section === "karakterinOzu" && sections.kapakSozu) {
-    text = `${sections.kapakSozu.trim()}\n\n…\n\n${text}`;
+  let text: string;
+  if (section === "karakterinOzu") {
+    const { preview } = splitKarakterinOzu(sections.karakterinOzu);
+    text = sections.kapakSozu
+      ? `${sections.kapakSozu.trim()}\n\n…\n\n${preview}`
+      : preview;
+  } else if (section === "karakterinOzuRest") {
+    const { rest } = splitKarakterinOzu(sections.karakterinOzu);
+    text = rest; // may be "" — caller (TTS route) handles that as 404
+  } else {
+    text = sections[section];
   }
   // 2: strip math-heavy parentheticals.
   text = text.replace(/\s*\([^)]*[+=][^)]*\)/g, "");
@@ -64,10 +105,16 @@ function buildSpeechText(
   return text.replace(/([.!?…])\s+(?=[^—])/g, "$1 — ");
 }
 
+// Helper exposed so the /api/tts route can detect the empty-rest case
+// (text too short to split) BEFORE invoking synthesize, and 404 cleanly.
+export function isRestEmptyFor(sections: YildiznameSections): boolean {
+  return splitKarakterinOzu(sections.karakterinOzu).rest.length === 0;
+}
+
 export async function fetchCachedAudio(
   env: Env,
   readingId: string,
-  section: SectionKey,
+  section: TtsSection,
 ): Promise<R2ObjectBody | null> {
   return env.TTS_BUCKET.get(ttsKey(readingId, section));
 }
@@ -82,7 +129,7 @@ export async function synthesizeStream(
   env: Env,
   ctx: ExecutionContext,
   readingId: string,
-  section: SectionKey,
+  section: TtsSection,
   sections: YildiznameSections,
 ): Promise<ReadableStream<Uint8Array>> {
   const text = buildSpeechText(section, sections);
@@ -146,7 +193,7 @@ export async function synthesizeStream(
 async function bufferAndStore(
   env: Env,
   readingId: string,
-  section: SectionKey,
+  section: TtsSection,
   stream: ReadableStream<Uint8Array>,
 ): Promise<void> {
   const chunks: Uint8Array[] = [];

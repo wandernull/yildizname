@@ -838,7 +838,11 @@ h4 {
 /* Inline scroll-hint pill that sits between karakterinOzu and the
    ornament; points the user at the locked sections below at the
    natural "just finished reading" moment. Centred, italic, gold-muted
-   so it reads as a guide rather than a sales line. */
+   so it reads as a guide rather than a sales line.
+   NOTE: superseded by the .continuation-cut CTA below (which sits
+   inside the karakterinOzu section, at the 1/3 cut point) — the
+   .section-scroll-hint element is no longer rendered, but the styles
+   are retained in case the pattern is re-introduced elsewhere. */
 .section-scroll-hint {
   text-align: center;
   font-family: var(--font-display);
@@ -848,6 +852,40 @@ h4 {
   letter-spacing: 0.025em;
   margin: 1.25rem 1rem 0;
   line-height: 1.5;
+}
+
+/* Inline "Devamını Oku" CTA + blurred-dot continuation that lives INSIDE
+   the karakterinOzu section in free state, right after the visible 1/3
+   preview. Sits flush against the bottom of the visible body so the cut
+   reads as one continuous section that fades out of clarity. Opens the
+   same reveal modal as the sticky CTA + the two payment blocks (wired
+   in setupStickyCtaAndModal via the .devamini-oku-cta selector). */
+.continuation-cut {
+  margin: 1.75rem 0 0;
+  display: flex;
+  justify-content: center;
+}
+.continuation-cut .btn-gold-fill {
+  /* full-width on mobile, comfortable max on wider screens */
+  width: 100%;
+  max-width: 320px;
+}
+.continuation-blurred {
+  /* Mirror .section.locked .section-body — same blur radius + brightness
+     so the visual cue reads identically to the nine fully-locked
+     sections below. No .lock-overlay though: this is the "more inside
+     this same section" cue, not a hard wall, so a softer treatment
+     avoids visually screaming. */
+  filter: blur(4px) brightness(0.6);
+  user-select: none;
+  pointer-events: none;
+  margin: 1.25rem 0 0;
+  color: var(--silver);
+  line-height: 1.95;
+  font-size: 1.05rem;
+}
+.continuation-blurred p {
+  margin: 0 0 1rem;
 }
 .section-body {
   color: var(--silver);

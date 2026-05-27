@@ -16,14 +16,20 @@ import {
   fetchInvoiceMetadata,
   verifyStripeSignature,
 } from "./lib/stripe";
-import { fetchCachedAudio, synthesizeStream, ttsKey } from "./lib/tts";
+import { splitKarakterinOzu } from "./lib/text";
+import {
+  fetchCachedAudio,
+  isRestEmptyFor,
+  synthesizeStream,
+  ttsKey,
+  type TtsSection,
+} from "./lib/tts";
 import {
   LOCKED_SECTION_KEYS,
   TRACK_EVENTS,
   type Env,
   type FormData,
   type Reading,
-  type SectionKey,
   type TrackEvent,
 } from "./lib/types";
 
@@ -109,10 +115,15 @@ app.post("/api/generate", async (c) => {
   try {
     const sections = await generateYildizname(form, c.env.ANTHROPIC_API_KEY);
     await insertReading(c.env.DB, { id, formData: form, sections, unlocked: false });
+    // freeSection in the generate response is the preview-portion only;
+    // mirrors what /api/reading/:id returns for the free state. The current
+    // frontend doesn't actually read this field (it re-fetches via /api/
+    // reading/:id once it navigates to /okuma/:id), but trimming it here
+    // keeps the boundary clean if a future caller ever does consume it.
     return c.json({
       id,
       status: "done",
-      freeSection: sections.karakterinOzu,
+      freeSection: splitKarakterinOzu(sections.karakterinOzu).preview,
       kapakSozu: sections.kapakSozu,
     });
   } catch (err) {
@@ -156,11 +167,22 @@ app.get("/api/reading/:id", async (c) => {
   if (!sections) {
     return c.json({ error: "Okuma boş döndü." }, 500);
   }
+  // karakterinOzu is the "free preview" section. Before unlock, return
+  // only the first ~1/3 (sentence-bounded — see splitKarakterinOzu) and
+  // signal there's more behind the paywall via karakterinOzuLocked=true,
+  // so the frontend can render the blurred continuation + inline CTA.
+  // The full text is never sent to the client until unlock — same defence
+  // pattern as the nine locked sections.
+  const karakterinOzuForClient = reading.unlocked
+    ? sections.karakterinOzu
+    : splitKarakterinOzu(sections.karakterinOzu).preview;
+
   const base = {
     id: reading.id,
     unlocked: reading.unlocked,
     kapakSozu: sections.kapakSozu,
-    karakterinOzu: sections.karakterinOzu,
+    karakterinOzu: karakterinOzuForClient,
+    karakterinOzuLocked: !reading.unlocked,
   };
   if (!reading.unlocked) {
     return c.json(base);
@@ -369,23 +391,30 @@ app.post("/api/stripe/webhook", async (c) => {
 
 // ----- TTS ------------------------------------------------------------------
 // GET /api/tts/:readingId/:section
-//   - karakterinOzu is always free (the audio prepends the kapakSözü so the
-//     first words the user hears are the literary mısra)
+//   - karakterinOzu       free — audio = kapakSözü + 1/3 PREVIEW
+//   - karakterinOzuRest   paid — audio = JUST the 2/3 remainder. The
+//                          client plays this back-to-back after the
+//                          preview to give paid users the full section
+//                          without re-synthesising what we already paid
+//                          for in the free state.
 //   - the 9 locked sections require reading.unlocked = true
-//   - response is audio/mpeg, served from R2 cache when present and
-//     freshly synthesized via ElevenLabs streaming when not
+//   - response is audio/mpeg, served from R2 cache when present and freshly
+//     synthesised via ElevenLabs streaming when not. Cache keys differ for
+//     karakterinOzu vs karakterinOzuRest so the two audio variants don't
+//     collide.
 
-const FREE_SECTION: SectionKey = "karakterinOzu";
-const ALLOWED_SECTIONS = new Set<SectionKey>([
-  FREE_SECTION,
+const FREE_SECTIONS = new Set<TtsSection>(["karakterinOzu"]);
+const ALLOWED_TTS_SECTIONS = new Set<TtsSection>([
+  "karakterinOzu",
+  "karakterinOzuRest",
   ...LOCKED_SECTION_KEYS,
 ]);
 
 app.get("/api/tts/:readingId/:section", async (c) => {
   const readingId = c.req.param("readingId");
-  const section = c.req.param("section") as SectionKey;
+  const section = c.req.param("section") as TtsSection;
 
-  if (!ALLOWED_SECTIONS.has(section)) {
+  if (!ALLOWED_TTS_SECTIONS.has(section)) {
     return c.json({ error: "Geçersiz bölüm." }, 400);
   }
 
@@ -393,8 +422,17 @@ app.get("/api/tts/:readingId/:section", async (c) => {
   if (!reading || !reading.sections) {
     return c.json({ error: "Okuma bulunamadı." }, 404);
   }
-  if (section !== FREE_SECTION && !reading.unlocked) {
+  if (!FREE_SECTIONS.has(section) && !reading.unlocked) {
     return c.json({ error: "Bu bölüm kilitli." }, 403);
+  }
+
+  // Edge case: text too short to split into preview + rest (e.g. an
+  // unusually terse karakterinOzu). The preview already covers the whole
+  // thing; there's no rest audio to play. Return 404 so the client's chain
+  // queue / compound-audio player cleanly skips this segment and moves on
+  // to the next item without an error toast.
+  if (section === "karakterinOzuRest" && isRestEmptyFor(reading.sections)) {
+    return c.json({ error: "Bu bölümün devamı yok." }, 404);
   }
 
   const audioHeaders = {

@@ -683,13 +683,29 @@ function fadeVolume(audio, from, to, durationMs) {
 // Build a native <audio>-backed player for one (reading, section).
 // Returns { wrap, audio, dispose } — the caller wires dispose into the
 // view-cleanup hook so audio stops on navigation away.
+//
+// `sectionKey` accepts either a string (single audio file, the common
+// case) or an array of section keys (played back-to-back through a
+// single <audio> element as one logical track). The array form exists
+// to support the paid karakterinOzu = ["karakterinOzu", "karakterinOzuRest"]
+// flow without re-synthesising the preview portion that's already
+// cached from the free state. Play/pause/stop UI controls the compound
+// playback as one thing; the user has no idea it's two files.
 function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStopped }) {
   const wrap = document.createElement("div");
   wrap.className = "audio-player";
 
+  // Normalise to an array. primaryKey is the first segment — used for
+  // funnel tracking (so paid replays of karakterinOzu still report as
+  // listened_free, which is the right bucket since the section *is* the
+  // free one even when its audio is now the preview + rest sequence).
+  const keys = Array.isArray(sectionKey) ? sectionKey : [sectionKey];
+  const primaryKey = keys[0];
+  let keyIdx = 0;
+
   const audio = new Audio();
   audio.preload = autoplay ? "auto" : "none";
-  audio.src = api.ttsUrl(readingId, sectionKey);
+  audio.src = api.ttsUrl(readingId, keys[0]);
 
   const playBtn = document.createElement("button");
   playBtn.type = "button";
@@ -742,25 +758,47 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
   audio.addEventListener("pause", () => {
     if (!audio.ended) setUiPaused();
   });
-  audio.addEventListener("ended", () => setUiIdle());
+  audio.addEventListener("ended", () => {
+    // Compound playback: if more segments queued, switch src and play on.
+    // Single-segment case: keyIdx stays 0, the (0 + 1 < 1) check is false,
+    // and we land in the setUiIdle() branch — identical to the old
+    // single-section behaviour.
+    if (keyIdx + 1 < keys.length) {
+      keyIdx += 1;
+      audio.src = api.ttsUrl(readingId, keys[keyIdx]);
+      const p = audio.play();
+      if (p && typeof p.then === "function") p.catch(() => setUiIdle());
+    } else {
+      setUiIdle();
+    }
+  });
   audio.addEventListener("error", () => {
-    // TTS pipeline failure (server-side 5xx, ElevenLabs upstream down,
-    // quota exhausted, network blip, etc.). Stay in-voice — surface the
-    // müneccim-anthropomorphism, no technical disclosure. Mirrors the
-    // server-side error string in src/index.ts. The retry CTA suggests
-    // transience without committing to a timeline.
     playBtn.classList.remove("loading", "pulse");
+    // Mid-queue error on a compound track (e.g. karakterinOzuRest 404s
+    // because the text was too short to split into preview + rest). Treat
+    // as a graceful end-of-playback rather than surfacing an error — the
+    // user already heard the meaningful audio in the previous segment.
+    if (keyIdx > 0) {
+      setUiIdle();
+      return;
+    }
+    // First-segment failure = real TTS pipeline failure (server-side 5xx,
+    // ElevenLabs upstream down, quota exhausted, network blip). Stay in-
+    // voice — müneccim-anthropomorphism, no technical disclosure. Mirrors
+    // the server-side error string in src/index.ts.
     setUiIdle("Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.");
   });
 
   playBtn.addEventListener("click", () => {
     playBtn.classList.remove("pulse");
     if (audio.paused) {
-      // Funnel tracking — fire only on play (start), not pause/resume.
-      // The free section is `karakterinOzu`; everything else is locked.
+      // Funnel tracking — fire only on play (start), not pause/resume,
+      // and not on inter-segment transitions within a compound track.
+      // primaryKey is the conceptual section (karakterinOzu vs. a locked
+      // one) regardless of which compound segment we'd play next.
       api.trackEvent(
         readingId,
-        sectionKey === "karakterinOzu" ? "listened_free" : "listened_locked",
+        primaryKey === "karakterinOzu" ? "listened_free" : "listened_locked",
       );
       const p = audio.play();
       if (p && typeof p.then === "function") p.catch(() => setUiIdle());
@@ -775,6 +813,12 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
       audio.currentTime = 0;
     } catch {
       /* may throw if metadata not loaded yet */
+    }
+    // Reset compound queue back to the first segment so a subsequent play
+    // starts from the beginning of the track, not from mid-rest.
+    if (keyIdx !== 0) {
+      keyIdx = 0;
+      audio.src = api.ttsUrl(readingId, keys[0]);
     }
     if (manuallyStopped) manuallyStopped();
     setUiIdle();
@@ -1113,15 +1157,18 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
     modal.showModal();
   };
 
-  // ALL three CTA entry points open the same modal:
+  // ALL unlock CTAs open the same modal:
   //   - the sticky bar on mobile
   //   - the top inline payment block (after karakterinOzu)
   //   - the bottom inline payment block (after the locked sections)
+  //   - the new inline "Devamını Oku" CTA at the karakterinOzu cut point
   // The modal is the single place that performs the actual unlock and
   // displays the price — keeps the disclosure consistent regardless of
   // which CTA the user taps.
   stickyTrigger.addEventListener("click", openModal);
-  for (const btn of root.querySelectorAll(".payment-block .btn-gold-fill")) {
+  for (const btn of root.querySelectorAll(
+    ".payment-block .btn-gold-fill, .devamini-oku-cta",
+  )) {
     btn.addEventListener("click", openModal);
   }
 
@@ -1342,7 +1389,17 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         title: SECTION_TITLES.karakterinOzu,
         text: data.karakterinOzu,
         readingId: id,
-        sectionKey: "karakterinOzu",
+        // sectionKey gates which audio file(s) the per-section player
+        // loads. In free state, /api/reading/:id has already truncated
+        // data.karakterinOzu to the preview, and the karakterinOzu audio
+        // variant (kapakSözü + preview) matches that — single file.
+        // Once unlocked, the player plays preview + rest BACK-TO-BACK
+        // via the compound-array form of sectionKey; the preview portion
+        // is reused from R2 cache (already synth'd during free state) so
+        // we only pay ElevenLabs for the new 2/3 rest, not the full text.
+        sectionKey: isUnlocked
+          ? ["karakterinOzu", "karakterinOzuRest"]
+          : "karakterinOzu",
         autoplay: journeyAutoplay && !userStoppedOnce,
         manuallyStopped: markStopped,
         // Counter only on the free-preview state — once unlocked the user
@@ -1354,15 +1411,34 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
       sectionsHost.appendChild(freeSection.node);
       disposables.push(freeSection.dispose);
 
-      // Inline scroll-hint pill right after karakterinOzu, before the
-      // ornament — catches the user at the natural "I just finished
-      // reading" moment and points to what's below. Same locked-only
-      // condition as the counter above.
+      // Free state: append the inline "Devamını Oku" CTA + blurred-dot
+      // continuation INSIDE the karakterinOzu section, right after its
+      // visible preview body. The CTA is the third unlock entry point
+      // (sticky bottom + top/bottom payment blocks are the others) and
+      // is wired into the same modal — see the .devamini-oku-cta entry
+      // in the click-handler loop below. The blurred-dot block mimics
+      // the locked-section visual language so the convention reads
+      // immediately. Replaces the old section-scroll-hint pill, which
+      // was just informational text saying the same thing weaker.
       if (!isUnlocked) {
-        const hint = document.createElement("p");
-        hint.className = "section-scroll-hint";
-        hint.textContent = "↓ Dokuz bölüm daha kilitli — mührünü kırınca açılır";
-        sectionsHost.appendChild(hint);
+        const cut = document.createElement("div");
+        cut.className = "continuation-cut";
+        const cutBtn = document.createElement("button");
+        cutBtn.type = "button";
+        cutBtn.className = "btn-gold-fill devamini-oku-cta";
+        cutBtn.textContent = "Devamını Oku →";
+        cut.appendChild(cutBtn);
+        freeSection.node.appendChild(cut);
+
+        const blurred = document.createElement("div");
+        blurred.className = "continuation-blurred";
+        blurred.setAttribute("aria-hidden", "true");
+        blurred.innerHTML = `
+          <p>················································ ······· ···········</p>
+          <p>·········· ·············· ······ ·············· ······· ··········</p>
+          <p>········· ······ ········· ········ ··········· ···············</p>
+        `;
+        freeSection.node.appendChild(blurred);
       }
 
       const orn = document.createElement("div");
@@ -1425,7 +1501,19 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         // chainAudio element. Cache hits make this near-seamless; cache
         // misses incur a per-section synthesis delay.
         // (handled below, after share-button wiring)
-        const queue = ["karakterinOzu", ...LOCKED_SECTION_KEYS];
+        // Chain queue plays karakterinOzu (preview) → karakterinOzuRest
+        // (the remaining 2/3, no kapakSözü prepend) → the nine locked
+        // sections. The preview audio is already cached in R2 from the
+        // free state, so the chain only triggers one new synthesis
+        // (karakterinOzuRest, on first chain play after unlock). If the
+        // text was too short to split, karakterinOzuRest 404s and the
+        // chain's error handler below treats it as a skip-and-advance,
+        // not a hard error.
+        const queue = [
+          "karakterinOzu",
+          "karakterinOzuRest",
+          ...LOCKED_SECTION_KEYS,
+        ];
         let queueIdx = 0;
         let chainActive = false;
 
@@ -1445,11 +1533,25 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         };
         chainAudio.addEventListener("ended", onEndedAdvance);
         chainAudio.addEventListener("error", () => {
-          // TTS pipeline failure during chain playback. Surface the same
-          // in-voice copy as the per-section player, briefly hijacking the
-          // button label since there's no inline status slot here. Disable
-          // the button for a few seconds so the user reads the message
-          // instead of immediately re-clicking on the now-default label.
+          // Special case: karakterinOzuRest 404s when the karakterinOzu
+          // text was too short to split (preview already covers all of
+          // it). Treat as a graceful skip-and-advance, not an error —
+          // the user heard the meaningful audio in the preview segment
+          // immediately before and would be confused by a hard stop.
+          if (
+            chainActive &&
+            queue[queueIdx] === "karakterinOzuRest" &&
+            queueIdx + 1 < queue.length
+          ) {
+            onEndedAdvance();
+            return;
+          }
+          // Real TTS pipeline failure during chain playback. Surface the
+          // same in-voice copy as the per-section player, briefly hijacking
+          // the button label since there's no inline status slot here.
+          // Disable the button for a few seconds so the user reads the
+          // message instead of immediately re-clicking on the now-default
+          // label.
           chainActive = false;
           listenBtn.textContent =
             "Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.";
