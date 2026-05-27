@@ -84,9 +84,13 @@ export interface Reading {
   paidAt: string | null;
   invoiceHostedUrl: string | null;
   invoicePdfUrl: string | null;
-  // Funnel-analytics fields (migration 0004). Populated by the server on
-  // first read (viewer_ip) and by POST /api/track/:id (the event flags).
+  // Funnel-analytics fields (migrations 0004 + 0005). Populated by the
+  // server on first read (viewer_ip, client_kind) and by POST /api/track/:id
+  // (the event flags).
   viewerIp: string | null;
+  // Client environment bucket, classified server-side from User-Agent on
+  // first visit. Null for pre-0005 rows. See classifyClient in src/index.ts.
+  clientKind: "web" | "inapp" | "mobile" | null;
   scrolledPastFree: boolean;
   listenedFree: boolean;
   listenedLocked: boolean;

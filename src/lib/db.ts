@@ -20,6 +20,7 @@ interface ReadingRow {
   invoice_hosted_url: string | null;
   invoice_pdf_url: string | null;
   viewer_ip: string | null;
+  client_kind: string | null;
   scrolled_past_free: number;
   listened_free: number;
   listened_locked: number;
@@ -32,7 +33,8 @@ const READING_COLUMNS = `
   id, form_data, sections, unlocked, status, error, created_at,
   stripe_session_id, stripe_payment_intent_id, paid_at,
   invoice_hosted_url, invoice_pdf_url,
-  viewer_ip, scrolled_past_free, listened_free, listened_locked,
+  viewer_ip, client_kind,
+  scrolled_past_free, listened_free, listened_locked,
   listened_chain, clicked_unlock, clicked_unlock_at
 `;
 
@@ -59,6 +61,12 @@ function rowToReading(row: ReadingRow): Reading {
     invoiceHostedUrl: row.invoice_hosted_url,
     invoicePdfUrl: row.invoice_pdf_url,
     viewerIp: row.viewer_ip,
+    clientKind:
+      row.client_kind === "web" ||
+      row.client_kind === "inapp" ||
+      row.client_kind === "mobile"
+        ? row.client_kind
+        : null,
     scrolledPastFree: row.scrolled_past_free === 1,
     listenedFree: row.listened_free === 1,
     listenedLocked: row.listened_locked === 1,
@@ -112,6 +120,22 @@ export async function captureViewerIp(
   await db
     .prepare(`UPDATE readings SET viewer_ip = ? WHERE id = ? AND viewer_ip IS NULL`)
     .bind(ip, id)
+    .run();
+}
+
+// Same first-visit-attribution pattern as captureViewerIp, but for the
+// client_kind bucket (web | inapp | mobile) classified from User-Agent.
+// Subsequent visits from a different environment (e.g. user clicked the
+// shared link first in Instagram, then re-opened in real Safari) keep
+// the original attribution.
+export async function captureClientKind(
+  db: D1Database,
+  id: string,
+  kind: "web" | "inapp" | "mobile",
+): Promise<void> {
+  await db
+    .prepare(`UPDATE readings SET client_kind = ? WHERE id = ? AND client_kind IS NULL`)
+    .bind(kind, id)
     .run();
 }
 

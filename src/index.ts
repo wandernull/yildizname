@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import {
   attachStripeSession,
+  captureClientKind,
   captureViewerIp,
   getReading,
   insertReading,
@@ -45,6 +46,28 @@ app.use(async (c, next) => {
 });
 
 // ----- input validation -----------------------------------------------------
+
+// Classify the visitor's browser environment from the User-Agent header
+// into one of three buckets. Order matters: in-app webviews (Instagram,
+// Facebook, etc.) usually report "Mobile" in their UA too, so we check
+// those patterns first and only fall through to "mobile" if none match.
+// The regex mirrors isInAppBrowser() in public/js/views.js so a row
+// classified as "inapp" here is the same population that gets the
+// clipboard-fallback share path on the client.
+function classifyClient(ua: string | null): "web" | "inapp" | "mobile" {
+  if (!ua) return "web";
+  if (
+    /Instagram|FBAN|FBAV|FB_IAB|FBIOS|Twitter|TikTok|musical_ly|Bytedance|Snapchat|LinkedInApp|MicroMessenger|KAKAOTALK|Line\//i.test(
+      ua,
+    )
+  ) {
+    return "inapp";
+  }
+  if (/Mobile|iPhone|iPad|Android/i.test(ua)) {
+    return "mobile";
+  }
+  return "web";
+}
 
 function isValidForm(body: unknown): body is FormData {
   if (!body || typeof body !== "object") return false;
@@ -108,16 +131,24 @@ app.get("/api/reading/:id", async (c) => {
   if (!reading) {
     return c.json({ error: "Okuma bulunamadı." }, 404);
   }
-  // Funnel analytics: capture the viewer's IP on the first read of this
-  // reading. captureViewerIp only writes if the column is still NULL, so
-  // this is a no-op on subsequent reads (or from a different IP for the
-  // same reading). Fire-and-forget — don't await this and don't break
-  // the request if it fails.
+  // Funnel analytics: capture the viewer's IP + browser-environment bucket
+  // on the first read of this reading. Both helpers only write if the
+  // column is still NULL, so subsequent reads (or visits from a different
+  // IP / different webview) don't overwrite the first-visit attribution.
+  // Fire-and-forget — don't await and don't break the request if either fails.
   const ip = c.req.header("cf-connecting-ip") ?? c.req.header("x-forwarded-for") ?? null;
   if (ip && !reading.viewerIp) {
     c.executionCtx.waitUntil(
       captureViewerIp(c.env.DB, id, ip).catch((err) => {
         console.warn("[reading] viewer_ip capture failed", { id, err });
+      }),
+    );
+  }
+  if (!reading.clientKind) {
+    const kind = classifyClient(c.req.header("user-agent") ?? null);
+    c.executionCtx.waitUntil(
+      captureClientKind(c.env.DB, id, kind).catch((err) => {
+        console.warn("[reading] client_kind capture failed", { id, err });
       }),
     );
   }
@@ -516,9 +547,13 @@ function renderAdminPage(readings: Reading[]): string {
     .map((r) => {
       const f = r.formData;
       const created = r.createdAt.replace("T", " ").slice(0, 19);
+      const kindLabel = r.clientKind
+        ? `<span class="kind ${r.clientKind}">${r.clientKind}</span>`
+        : `<span class="kind dim">—</span>`;
       return `<tr>
   <td class="when">${esc(created)}</td>
   <td class="ip">${esc(r.viewerIp ?? "—")}</td>
+  <td class="kind-cell">${kindLabel}</td>
   <td class="who">
     <strong>${esc(f.name)}</strong><br />
     <span class="dim">anne: ${esc(f.motherName)}</span>
@@ -574,6 +609,12 @@ function renderAdminPage(readings: Reading[]): string {
     td.who strong { color: var(--fg); }
     td.who .dim, td.when2 .dim { color: var(--dim); font-size: 0.78rem; }
     td.ip { color: var(--dim); font-family: ui-monospace, monospace; font-size: 0.78rem; }
+    td.kind-cell { white-space: nowrap; }
+    .kind { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .kind.web    { background: rgba(136,146,163,0.15); color: var(--dim); }
+    .kind.mobile { background: rgba(106,176,255,0.15); color: #6ab0ff; }
+    .kind.inapp  { background: rgba(201,168,76,0.18); color: var(--gold); }
+    .kind.dim    { background: transparent; color: var(--dim); }
     td.id a { color: var(--gold); text-decoration: none; font-size: 0.78rem; }
     td.id a:hover { text-decoration: underline; }
     .empty { padding: 3rem 0; text-align: center; color: var(--dim); font-style: italic; }
@@ -599,6 +640,7 @@ function renderAdminPage(readings: Reading[]): string {
       <tr>
         <th>Zaman</th>
         <th>IP</th>
+        <th>Tür</th>
         <th>Kim</th>
         <th>Doğum</th>
         <th>Scroll</th>
