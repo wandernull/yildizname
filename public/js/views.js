@@ -932,13 +932,30 @@ function makeLockedActionsBlock() {
   return wrap;
 }
 
+// In-app browsers (Instagram, Facebook, TikTok, X, etc.) ship
+// navigator.share but implement it badly. Instagram's iOS in-app
+// webview in particular shows a free-text modal with non-functional
+// Cancel/OK buttons — the user has to manually select and copy the URL
+// from the modal body. Facebook's is similar. We treat these like
+// desktop (clipboard copy + visual confirmation) so the user gets a
+// reliable share path. UA-sniffing is the only signal here; there's no
+// standardised capability check for "your native share sheet is sane".
+function isInAppBrowser() {
+  const ua = navigator.userAgent || "";
+  return /Instagram|FBAN|FBAV|FB_IAB|FBIOS|Twitter|TikTok|musical_ly|Bytedance|Snapchat|LinkedInApp|MicroMessenger|KAKAOTALK|Line\//i.test(
+    ua,
+  );
+}
+
 // Native share sheet on touch-primary devices (mobile), clipboard copy on
 // everything else. Why not navigator.share everywhere it exists? — macOS
 // Safari ships navigator.share but its share sheet has no "Copy" option
 // (Apple's deliberate choice, ~5y-old complaint, unlikely to change). On
 // desktop the user almost certainly wants Copy as the primary action, so we
-// skip the native sheet there. matchMedia('(hover: none) and (pointer:
-// coarse)') is the standard CSS-level "this is a touch device" probe.
+// skip the native sheet there. We also skip it inside in-app webviews
+// (Instagram/FB/TikTok/etc.) because their navigator.share is broken (see
+// isInAppBrowser above). matchMedia('(hover: none) and (pointer: coarse)')
+// is the standard CSS-level "this is a touch device" probe.
 async function handleShare(btn) {
   const url = window.location.href;
   const shareData = {
@@ -949,11 +966,13 @@ async function handleShare(btn) {
   const isTouchPrimary = window.matchMedia(
     "(hover: none) and (pointer: coarse)",
   ).matches;
+  const useNativeShare =
+    isTouchPrimary && navigator.share && !isInAppBrowser();
 
   try {
-    if (isTouchPrimary && navigator.share) {
-      // Mobile: native share sheet (iOS Safari includes Copy here;
-      // Android's share sheet is rich with messaging apps).
+    if (useNativeShare) {
+      // Mobile in a real browser: native share sheet (iOS Safari includes
+      // Copy here; Android's share sheet is rich with messaging apps).
       await navigator.share(shareData);
       // Native UI handles its own confirmation — no in-app feedback needed.
     } else if (navigator.clipboard?.writeText) {
