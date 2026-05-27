@@ -839,10 +839,11 @@ h4 {
    ornament; points the user at the locked sections below at the
    natural "just finished reading" moment. Centred, italic, gold-muted
    so it reads as a guide rather than a sales line.
-   NOTE: superseded by the .continuation-cut CTA below (which sits
-   inside the karakterinOzu section, at the 1/3 cut point) — the
-   .section-scroll-hint element is no longer rendered, but the styles
-   are retained in case the pattern is re-introduced elsewhere. */
+   NOTE: superseded by the inline literary paywall (.rest-teaser-inline
+   + .devamini-oku-inline, appended to the last visible <p> of the
+   karakterinOzu section in views.js). The .section-scroll-hint element
+   is no longer rendered, but the styles are retained in case the
+   pattern is re-introduced elsewhere. */
 .section-scroll-hint {
   text-align: center;
   font-family: var(--font-display);
@@ -854,38 +855,49 @@ h4 {
   line-height: 1.5;
 }
 
-/* Inline "Devamını Oku" CTA + blurred-dot continuation that lives INSIDE
-   the karakterinOzu section in free state, right after the visible 1/3
-   preview. Sits flush against the bottom of the visible body so the cut
-   reads as one continuous section that fades out of clarity. Opens the
-   same reveal modal as the sticky CTA + the two payment blocks (wired
-   in setupStickyCtaAndModal via the .devamini-oku-cta selector). */
-.continuation-cut {
-  margin: 1.75rem 0 0;
-  display: flex;
-  justify-content: center;
-}
-.continuation-cut .btn-gold-fill {
-  /* full-width on mobile, comfortable max on wider screens */
-  width: 100%;
-  max-width: 320px;
-}
-.continuation-blurred {
-  /* Mirror .section.locked .section-body — same blur radius + brightness
-     so the visual cue reads identically to the nine fully-locked
-     sections below. No .lock-overlay though: this is the "more inside
-     this same section" cue, not a hard wall, so a softer treatment
-     avoids visually screaming. */
-  filter: blur(4px) brightness(0.6);
+/* Inline literary paywall at the karakterinOzu cut point. Appended to
+   the last <p> of the visible preview in views.js:
+     [preview text…] [.rest-teaser-inline]…  [.devamini-oku-inline]
+   The teaser is a blurred but real sentence (server-side teaser snippet
+   = first sentence of the locked rest). The ellipsis is plain text that
+   bridges the blurred prose into the gold italic "Devamını oku →" link.
+   All on the same paragraph line — wraps naturally at line ends. */
+.rest-teaser-inline {
+  /* Stays inline so the blur ribbon flows with the surrounding paragraph
+     text. Same blur radius + brightness as the fully-locked sections so
+     the visual language is consistent across the page. */
+  display: inline;
+  filter: blur(4px) brightness(0.65);
   user-select: none;
   pointer-events: none;
-  margin: 1.25rem 0 0;
   color: var(--silver);
-  line-height: 1.95;
-  font-size: 1.05rem;
+  /* Small extra spacing keeps the blur halo from smashing into the
+     adjacent clear text on either side. */
+  margin: 0 0.15em;
 }
-.continuation-blurred p {
-  margin: 0 0 1rem;
+.devamini-oku-inline {
+  /* Gold italic inline link styled like a literary aside, not a button.
+     Italic + Cormorant matches the brand voice; subtle underline-on-
+     hover gives the affordance without screaming "WEB LINK". */
+  color: var(--gold);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.05em;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: color 0.2s ease, border-color 0.2s ease;
+  /* Whitespace nowrap on the link itself prevents "Devamını oku →" from
+     splitting across two lines mid-phrase. */
+  white-space: nowrap;
+}
+.devamini-oku-inline:hover,
+.devamini-oku-inline:focus-visible {
+  color: var(--gold-light);
+  border-bottom-color: rgba(232, 208, 138, 0.55);
+  outline: none;
 }
 .section-body {
   color: var(--silver);

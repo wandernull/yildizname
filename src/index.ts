@@ -16,7 +16,7 @@ import {
   fetchInvoiceMetadata,
   verifyStripeSignature,
 } from "./lib/stripe";
-import { splitKarakterinOzu } from "./lib/text";
+import { getKarakterinOzuTeaser, splitKarakterinOzu } from "./lib/text";
 import {
   fetchCachedAudio,
   isRestEmptyFor,
@@ -167,12 +167,13 @@ app.get("/api/reading/:id", async (c) => {
   if (!sections) {
     return c.json({ error: "Okuma boş döndü." }, 500);
   }
-  // karakterinOzu is the "free preview" section. Before unlock, return
-  // only the first ~1/3 (sentence-bounded — see splitKarakterinOzu) and
-  // signal there's more behind the paywall via karakterinOzuLocked=true,
-  // so the frontend can render the blurred continuation + inline CTA.
-  // The full text is never sent to the client until unlock — same defence
-  // pattern as the nine locked sections.
+  // karakterinOzu is the "free preview" section. Before unlock the client
+  // receives only the 1/3 preview (sentence-bounded — see splitKarakterinOzu)
+  // PLUS a short `karakterinOzuTeaser` snippet — the first sentence of
+  // the locked `rest`. The teaser is rendered inline-blurred at the end
+  // of the visible preview as a "fading into more" continuation cue.
+  // The bulk of `rest` stays server-side until unlock, same defence-in-
+  // depth pattern as the nine fully-locked sections.
   const karakterinOzuForClient = reading.unlocked
     ? sections.karakterinOzu
     : splitKarakterinOzu(sections.karakterinOzu).preview;
@@ -182,7 +183,9 @@ app.get("/api/reading/:id", async (c) => {
     unlocked: reading.unlocked,
     kapakSozu: sections.kapakSozu,
     karakterinOzu: karakterinOzuForClient,
-    karakterinOzuLocked: !reading.unlocked,
+    karakterinOzuTeaser: reading.unlocked
+      ? null
+      : getKarakterinOzuTeaser(sections.karakterinOzu),
   };
   if (!reading.unlocked) {
     return c.json(base);

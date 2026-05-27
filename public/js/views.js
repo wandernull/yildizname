@@ -1161,15 +1161,28 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   //   - the sticky bar on mobile
   //   - the top inline payment block (after karakterinOzu)
   //   - the bottom inline payment block (after the locked sections)
-  //   - the new inline "Devamını Oku" CTA at the karakterinOzu cut point
+  //   - the inline italic "Devamını oku →" link at the end of the
+  //     visible preview paragraph (literary cut point inside the
+  //     karakterinOzu section body)
   // The modal is the single place that performs the actual unlock and
   // displays the price — keeps the disclosure consistent regardless of
   // which CTA the user taps.
   stickyTrigger.addEventListener("click", openModal);
   for (const btn of root.querySelectorAll(
-    ".payment-block .btn-gold-fill, .devamini-oku-cta",
+    ".payment-block .btn-gold-fill, .devamini-oku-inline",
   )) {
     btn.addEventListener("click", openModal);
+    // Inline link uses role="button" + Enter/Space keyboard activation
+    // for accessibility (it's an <a> without href, so default keyboard
+    // handling doesn't fire click).
+    if (btn.classList.contains("devamini-oku-inline")) {
+      btn.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          openModal();
+        }
+      });
+    }
   }
 
   // Modal close affordances: × button, backdrop click, native ESC handler.
@@ -1411,34 +1424,51 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
       sectionsHost.appendChild(freeSection.node);
       disposables.push(freeSection.dispose);
 
-      // Free state: append the inline "Devamını Oku" CTA + blurred-dot
-      // continuation INSIDE the karakterinOzu section, right after its
-      // visible preview body. The CTA is the third unlock entry point
-      // (sticky bottom + top/bottom payment blocks are the others) and
-      // is wired into the same modal — see the .devamini-oku-cta entry
-      // in the click-handler loop below. The blurred-dot block mimics
-      // the locked-section visual language so the convention reads
-      // immediately. Replaces the old section-scroll-hint pill, which
-      // was just informational text saying the same thing weaker.
-      if (!isUnlocked) {
-        const cut = document.createElement("div");
-        cut.className = "continuation-cut";
-        const cutBtn = document.createElement("button");
-        cutBtn.type = "button";
-        cutBtn.className = "btn-gold-fill devamini-oku-cta";
-        cutBtn.textContent = "Devamını Oku →";
-        cut.appendChild(cutBtn);
-        freeSection.node.appendChild(cut);
+      // Free state: append the inline literary-paywall — a blurred real
+      // sentence + ellipsis + gold italic "Devamını oku →" link — to
+      // the last visible <p> of the karakterinOzu section body. The link
+      // is the third unlock entry point (sticky + top/bottom payment
+      // blocks are the others) and is wired into the same modal — see
+      // the .devamini-oku-inline entry in the click-handler loop below.
+      // Replaces an earlier "big button + dot placeholder" treatment and
+      // a section-scroll-hint pill, both retired because they read as
+      // "section complete" rather than "section continues".
+      if (!isUnlocked && data.karakterinOzuTeaser) {
+        // Inline literary-paywall pattern: append the first sentence of
+        // the locked rest as a blurred <span> directly inside the last
+        // visible <p>, followed by an ellipsis and a gold italic
+        // "Devamını oku →" link. The reader's eye flows from clear
+        // preview prose → blurred real text → ellipsis → gold CTA, all
+        // on the same paragraph line. No paragraph break, no horizontal
+        // button — feels like the müneccim drops his voice into a hint
+        // and points to "and there's more…". The link opens the same
+        // reveal modal as the sticky CTA + payment blocks (wired below
+        // via the `.devamini-oku-inline` selector).
+        const lastP = freeSection.node.querySelector(
+          ".section-body > p:last-child",
+        );
+        if (lastP) {
+          // Leading space so the blur ribbon doesn't smash into the
+          // preview's final period.
+          lastP.appendChild(document.createTextNode(" "));
 
-        const blurred = document.createElement("div");
-        blurred.className = "continuation-blurred";
-        blurred.setAttribute("aria-hidden", "true");
-        blurred.innerHTML = `
-          <p>················································ ······· ···········</p>
-          <p>·········· ·············· ······ ·············· ······· ··········</p>
-          <p>········· ······ ········· ········ ··········· ···············</p>
-        `;
-        freeSection.node.appendChild(blurred);
+          const teaser = document.createElement("span");
+          teaser.className = "rest-teaser-inline";
+          teaser.setAttribute("aria-hidden", "true");
+          teaser.textContent = data.karakterinOzuTeaser;
+          lastP.appendChild(teaser);
+
+          // Ellipsis in clear text bridges blurred prose to the gold
+          // link, signalling "...there's more, click here".
+          lastP.appendChild(document.createTextNode(" … "));
+
+          const link = document.createElement("a");
+          link.className = "devamini-oku-inline";
+          link.setAttribute("role", "button");
+          link.setAttribute("tabindex", "0");
+          link.textContent = "Devamını oku →";
+          lastP.appendChild(link);
+        }
       }
 
       const orn = document.createElement("div");

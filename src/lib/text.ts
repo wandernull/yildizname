@@ -67,3 +67,23 @@ export function splitKarakterinOzu(text: string): {
     rest: trimmed.slice(bestEnd).trimStart(),
   };
 }
+
+// Returns the first sentence of the locked `rest` portion — short enough
+// to render inline-blurred at the bottom of the visible preview as a
+// "fading into more" teaser. The full `rest` stays server-side and is
+// only sent to the client after unlock; this teaser is the controlled
+// information leak that makes the cut feel continuous instead of cliff-
+// edged. Falls back to the first ~15 words if the sentence boundary is
+// too far away (single very long opening sentence in rest).
+export function getKarakterinOzuTeaser(text: string): string {
+  const { rest } = splitKarakterinOzu(text);
+  if (!rest) return "";
+  // Match up to the first sentence terminator; cap length so we don't
+  // accidentally expose a 300-character sentence.
+  const sentenceMatch = rest.match(/^[\s\S]{1,200}?[.!?…]["')\]»]?(?=\s|$)/);
+  if (sentenceMatch) {
+    return sentenceMatch[0].trim();
+  }
+  const words = rest.split(/\s+/).slice(0, 15);
+  return words.join(" ") + (rest.split(/\s+/).length > 15 ? "…" : "");
+}
