@@ -2,11 +2,12 @@ import type { Env } from "./types";
 
 // Outbound transactional email via Resend (direct REST, no SDK — same
 // shape as stripe.ts). We send AS destek@yildizna.me: the yildizna.me
-// domain is verified in Resend (DKIM on the root) while inbound
-// destek@/support@ still route through Cloudflare Email Routing to the
-// real inbox. So a reply to one of our sends loops back there — no
-// separate Reply-To is needed because the From address is already the
-// inbound-routed mailbox.
+// domain is verified in Resend (DKIM on the root) while inbound destek@
+// still routes through Cloudflare Email Routing to the real inbox (a
+// support@ alias also routes there silently, but is no longer advertised
+// — destek@ is the one public address). So a reply to one of our sends
+// loops back there — no separate Reply-To is needed because the From
+// address is already the inbound-routed mailbox.
 
 const RESEND_API_BASE = "https://api.resend.com";
 

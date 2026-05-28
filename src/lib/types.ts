@@ -152,7 +152,8 @@ export interface Env {
   ADMIN_PASS: string;
   // Resend API key for outbound email sent AS destek@yildizna.me (promo /
   // win-back codes from the admin Ops page). Set via `npx wrangler secret
-  // put RESEND_API_KEY`; locally in .dev.vars. Inbound destek@/support@
-  // still route through Cloudflare Email Routing to the real inbox.
+  // put RESEND_API_KEY`; locally in .dev.vars. Inbound destek@ routes
+  // through Cloudflare Email Routing to the real inbox (a support@ alias
+  // also routes there silently, but destek@ is the only public address).
   RESEND_API_KEY: string;
 }
