@@ -182,36 +182,34 @@
           <hr class="gold-rule" />
         </header>
         <div class="sections-host"></div>
-        <div class="post-actions">
-          <div class="post-actions-row">
-            <button type="button" class="btn-gold-outline action-listen-all">Baştan Sona Dinle</button>
-            <button type="button" class="btn-gold-outline action-print">PDF İndir</button>
-            <button type="button" class="btn-gold-outline action-share">Paylaş</button>
+
+        <!-- Persistent bottom action bar. ONE state-aware system that
+             replaces the old unlock sticky, feedback sticky, bottom
+             post-actions row, and "Yeni okuma" footer. views.js sets the
+             primary pill's label + handler and shows the right secondary
+             icons for free vs paid. Fades in ~1.5s after mount, then
+             stays. The result view gets bottom padding so the bar never
+             permanently covers content. -->
+        <div class="action-bar" aria-hidden="true">
+          <button type="button" class="action-bar-primary btn-gold-fill"></button>
+          <div class="action-bar-icons">
+            <button type="button" class="action-bar-icon ab-pdf" hidden>
+              <span class="ab-glyph" aria-hidden="true">⬇</span>
+              <span class="ab-label">PDF</span>
+            </button>
+            <button type="button" class="action-bar-icon ab-share">
+              <span class="ab-glyph" aria-hidden="true">↗</span>
+              <span class="ab-label">Paylaş</span>
+            </button>
+            <button type="button" class="action-bar-icon ab-feedback" hidden>
+              <span class="ab-glyph" aria-hidden="true">✦</span>
+              <span class="ab-label">Yorum</span>
+            </button>
+            <button type="button" class="action-bar-icon ab-new">
+              <span class="ab-glyph" aria-hidden="true">↻</span>
+              <span class="ab-label">Yeni</span>
+            </button>
           </div>
-        </div>
-        <nav class="result-new-reading" aria-label="Yeni okuma">
-          <a href="/" data-link class="new-reading-link">Yeni bir okuma →</a>
-        </nav>
-
-        <!-- Mobile-only sticky CTA. Hidden on desktop via CSS; hidden on
-             mobile until the user scrolls past karakterinOzu; hides again
-             when the bottom payment block scrolls into view. Tap opens
-             the unlock-modal — price is deliberately not on the bar so it
-             doesn't break motivation while scrolling. -->
-        <div class="sticky-cta" aria-hidden="true">
-          <button type="button" class="sticky-cta-trigger">Kaderinin tamamını aç →</button>
-        </div>
-
-        <!-- Feedback sticky CTA. Paid-only: views.js shows this (and
-             hides the unlock sticky) when the reading is unlocked AND no
-             feedback has been left yet. Fades in a few seconds after the
-             result page mounts so it doesn't interrupt the read. Tap
-             opens the feedback modal. Dismissed permanently for this
-             reading once feedback is submitted. -->
-        <div class="feedback-sticky" aria-hidden="true" hidden>
-          <button type="button" class="feedback-sticky-trigger">
-            Müneccime bir söz bırak →
-          </button>
         </div>
 
         <!-- Post-payment success card. Lives inside the same overlay

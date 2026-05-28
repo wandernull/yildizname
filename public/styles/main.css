@@ -341,42 +341,46 @@ h4 {
   border-color: var(--gold-light);
 }
 
-/* Sticky bottom CTA — mobile-only. The previous version used a
-   transparent button with italic gold text and read as a "secondary
-   link" — users scrolled right past it. Now the trigger is a full-
-   width gold-gradient pill (same visual weight as the inline
-   .btn-gold-fill payment button) so it registers as a primary CTA at
-   a glance. The dark tray around it preserves the brand atmosphere;
-   the gold pill is the part the user clicks. Price is still hidden
-   here (the modal does the reveal on tap). */
-.sticky-cta {
+/* Persistent bottom action bar — the single state-aware action surface on
+   the result page (all viewports). A prominent primary pill on top + a
+   row of small icon+label secondary buttons. Fades in ~1.5s after mount
+   (JS adds .is-visible), then stays. The .view-result has matching
+   bottom padding so the bar never permanently covers content. */
+.action-bar {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 10;
-  padding: 0.75rem 1rem;
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding: 0.7rem 1rem;
+  padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
   background: linear-gradient(
     180deg,
-    rgba(10, 14, 26, 0.78) 0%,
+    rgba(10, 14, 26, 0.82) 0%,
     var(--deep) 55%
   );
   border-top: 1px solid rgba(201, 168, 76, 0.4);
-  text-align: center;
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
   transition: opacity 0.4s ease, transform 0.4s ease;
 }
-.sticky-cta.is-visible {
+.action-bar.is-visible {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
 }
-.sticky-cta-trigger {
+/* Primary pill — gold-gradient, same visual weight as the inline
+   .btn-gold-fill so it reads as the primary action. Capped width so it
+   doesn't stretch awkwardly wide on desktop. */
+.action-bar-primary {
   display: block;
   width: 100%;
+  max-width: 420px;
   background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
   color: var(--deep);
   border: none;
@@ -384,21 +388,56 @@ h4 {
   font-weight: 600;
   font-size: 1.05rem;
   letter-spacing: 0.04em;
-  padding: 0.85rem 1.5rem;
+  padding: 0.8rem 1.5rem;
   border-radius: 2px;
   cursor: pointer;
   box-shadow: 0 4px 18px rgba(201, 168, 76, 0.35);
   transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
-.sticky-cta-trigger:hover,
-.sticky-cta-trigger:active {
+.action-bar-primary:hover:not(:disabled),
+.action-bar-primary:active:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 6px 22px rgba(201, 168, 76, 0.45);
 }
-@media (min-width: 641px) {
-  .sticky-cta {
-    display: none !important;
-  }
+.action-bar-primary:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+/* Secondary icon row */
+.action-bar-icons {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+.action-bar-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--gold-light);
+  padding: 0.1rem 0.25rem;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+.action-bar-icon:hover,
+.action-bar-icon:active {
+  color: #fff;
+  transform: translateY(-1px);
+}
+.action-bar-icon[hidden] {
+  display: none;
+}
+.ab-glyph {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.ab-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+  font-family: var(--font-body);
 }
 
 /* Unlock-reveal modal — opened from the sticky CTA tap. Native <dialog>
@@ -472,60 +511,9 @@ h4 {
   font-size: 0.9rem;
 }
 
-/* ============================================================
- * Feedback sticky CTA + modal (paid-only)
- * ============================================================
- * Unlike the unlock sticky (mobile-only), the feedback sticky shows on
- * ALL viewports — it's the sole feedback entry point, so desktop paid
- * users need it too. Subtler than the gold-fill payment CTA: a gold
- * outline pill that reads as "optional nicety", not "primary action". */
-.feedback-sticky {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10;
-  padding: 0.75rem 1rem;
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
-  background: linear-gradient(
-    180deg,
-    rgba(10, 14, 26, 0.78) 0%,
-    var(--deep) 55%
-  );
-  border-top: 1px solid rgba(201, 168, 76, 0.28);
-  text-align: center;
-  opacity: 0;
-  transform: translateY(8px);
-  pointer-events: none;
-  transition: opacity 0.4s ease, transform 0.4s ease;
-}
-.feedback-sticky.is-visible {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-.feedback-sticky-trigger {
-  display: inline-block;
-  background: transparent;
-  border: 1px solid var(--gold);
-  color: var(--gold-light);
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 600;
-  font-size: 1rem;
-  letter-spacing: 0.03em;
-  padding: 0.7rem 1.6rem;
-  border-radius: 2px;
-  cursor: pointer;
-  transition: background 0.25s ease, transform 0.2s ease;
-}
-.feedback-sticky-trigger:hover,
-.feedback-sticky-trigger:active {
-  background: rgba(201, 168, 76, 0.12);
-  transform: translateY(-1px);
-}
-
-/* Feedback modal — same native <dialog> shell as the unlock modal. */
+/* Feedback modal — same native <dialog> shell as the unlock modal.
+   (The feedback sticky was removed in the action-bar consolidation; the
+   modal is now opened by the bar's "✦ Yorum" icon.) */
 .feedback-modal {
   border: none;
   background: transparent;
@@ -659,29 +647,9 @@ h4 {
   margin: 0 0 1.5rem;
 }
 
-/* "Yeni bir okuma" footer on /okuma/:id — non-tech users get a clear way
-   to start another reading without copy-pasting URLs. */
-.result-new-reading {
-  margin-top: 3.5rem;
-  padding-top: 2.25rem;
-  border-top: 1px solid rgba(201, 168, 76, 0.18);
-  text-align: center;
-}
-.new-reading-link {
-  font-family: var(--font-display);
-  font-style: italic;
-  color: var(--gold);
-  font-size: 1.05rem;
-  text-decoration: none;
-  letter-spacing: 0.04em;
-  border-bottom: 1px solid rgba(201, 168, 76, 0.3);
-  padding-bottom: 3px;
-  transition: color 0.3s ease, border-color 0.3s ease;
-}
-.new-reading-link:hover {
-  color: var(--gold-light);
-  border-color: var(--gold-light);
-}
+/* (The "Yeni bir okuma" footer + .new-reading-link were removed in the
+   action-bar consolidation — "start a new reading" is now the bar's
+   "↻ Yeni" icon.) */
 
 /* ---------- form ---------- */
 
@@ -964,6 +932,9 @@ h4 {
 .view-result {
   max-width: 720px;
   margin: 0 auto;
+  /* Clearance so the persistent .action-bar (fixed, bottom) never covers
+     the end of the content. ~2 rows (pill + icons) + safe-area inset. */
+  padding-bottom: calc(8.5rem + env(safe-area-inset-bottom));
 }
 .result-header {
   text-align: center;
@@ -1374,37 +1345,10 @@ h4 {
   font-style: italic;
   font-size: 0.9rem;
 }
-.post-actions {
-  margin-top: 3rem;
-  /* Breathing room before whatever comes next. Needed for the TOP locked
-     occurrence (followed by .section.locked) — without this they touch
-     because .section has no margin-top. The BOTTOM occurrence is unaffected:
-     margin-collapses with .result-new-reading's 3.5rem margin-top. */
-  margin-bottom: 1.5rem;
-  display: grid;
-  justify-items: center;
-  gap: 0.75rem;
-}
-.post-actions-row {
-  display: flex;
-  gap: 1rem;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-/* Free-state locked action buttons (Baştan Sona Dinle / PDF İndir):
-   disabled + a small inline lock glyph. They light up (enabled, glyph
-   removed isn't necessary — disabled state dims them) once unlocked. */
-.btn-gold-outline.is-locked {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.btn-gold-outline.is-locked .lock-glyph {
-  display: inline-block;
-  width: 12px;
-  height: 14px;
-  flex-shrink: 0;
-}
+/* (Removed in the action-bar consolidation: .post-actions / .post-actions-row
+   and the .is-locked / .lock-glyph locked-button rules. The bottom actions
+   now live in the persistent .action-bar; free state simply doesn't render
+   the paid-only icons rather than showing them disabled.) */
 
 /* ---------- error view ---------- */
 
@@ -1430,10 +1374,8 @@ h4 {
   #moon,
   #shooting-star-host,
   .audio-player,
-  .post-actions,
+  .action-bar,
   .unlock-card,
-  .sticky-cta,
-  .feedback-sticky,
   .progress {
     display: none !important;
   }

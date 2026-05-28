@@ -923,12 +923,10 @@ function makeSection({
   return { node: section, dispose: player.dispose };
 }
 
-// Lock glyph used inside the disabled free-state action buttons
-// (Baştan Sona Dinle / PDF İndir). Inline SVG so it inherits the
-// button's currentColor. (The Lean redesign removed the old top/bottom
-// locked-actions blocks + the makeLockedActionsBlock builder; this glyph
-// + the inline locking in renderResult's free branch are what remain.)
-const LOCK_GLYPH_HTML = `<span class="lock-glyph" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6 V4 a3 3 0 0 1 6 0 v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="2" y="6" width="8" height="7" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="9.5" r="0.7" fill="currentColor"/></svg></span>`;
+// (LOCK_GLYPH_HTML removed in the action-bar consolidation — free state
+// no longer renders disabled "locked" buttons; the paid-only icons are
+// simply absent from the bar until unlock, and the paid features are
+// communicated by the unlock card's feature list + the modal.)
 
 // In-app browsers (Instagram, Facebook, TikTok, X, etc.) ship
 // navigator.share but implement it badly. Instagram's iOS in-app
@@ -1007,6 +1005,13 @@ const PRICE_LABEL = "349,99 ₺";
 // label makes the two-step flow feel like one continuous action.
 const PAYMENT_CTA_LABEL = "Kaderinin tamamını aç →";
 
+// Action-bar primary pill labels for the paid "Baştan Sona Dinle" chain
+// button. The chain logic toggles textContent between these two; the play/
+// pause glyph is baked into the string (textContent replaces children, so
+// a separate icon element would get clobbered on toggle).
+const LISTEN_IDLE = "▶ Baştan Sona Dinle";
+const LISTEN_PLAYING = "⏸ Sesi Durdur";
+
 // Shared unlock flow. Reached via the reveal modal's CTA, which every
 // unlock entry point (unlock card, sticky, inline "Devamını oku") opens.
 // Calls /api/unlock which now returns a
@@ -1048,57 +1053,20 @@ async function performUnlock(id, router, btn, errEl, restoreLabel) {
   }
 }
 
-// Wires the sticky-bottom-CTA and reveal-modal that live in the result
-// template. Only called when !isUnlocked. The sticky fades in shortly
-// after mount and hides when the unlock card scrolls into view (the card
-// has its own button, so the sticky would be redundant there). All
-// unlock entry points — sticky, unlock card, inline "Devamını oku" —
-// open the same modal, whose CTA routes through performUnlock.
-function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
-  const sticky = root.querySelector(".sticky-cta");
-  const stickyTrigger = root.querySelector(".sticky-cta-trigger");
+// Wires the unlock reveal modal: in-flow entry points (unlock card button
+// + inline "Devamını oku →" link) → open it; close affordances; CTA →
+// performUnlock. Returns openModal so the caller can also wire the action
+// bar's free-state primary pill to it. The modal is the single place that
+// performs the actual unlock + shows the price, regardless of which entry
+// point opened it.
+function wireUnlockModal({ root, id, router, disposables }) {
   const modal = root.querySelector(".unlock-modal");
   const modalCta = root.querySelector(".unlock-modal-cta");
   const modalClose = root.querySelector(".unlock-modal-close");
   const modalError = root.querySelector(".unlock-modal-error");
-  if (!sticky || !modal || !modalCta) return;
+  if (!modal || !modalCta) return () => {};
 
-  // Visibility logic: sticky fades in 1.5s after the view mounts (just
-  // enough delay so the autoplay starts cleanly without the sticky
-  // sliding in over it), then stays visible until the unlock card scrolls
-  // into the viewport (the card carries its own button, so the sticky is
-  // redundant there).
-  const unlockCards = sectionsHost.querySelectorAll(".unlock-card");
-  const bottomCard = unlockCards[unlockCards.length - 1] ?? null;
-
-  let mountedShown = false;
-  let bottomVisible = false;
-  const refresh = () => {
-    sticky.classList.toggle("is-visible", mountedShown && !bottomVisible);
-  };
-
-  const showDelay = window.setTimeout(() => {
-    mountedShown = true;
-    refresh();
-  }, 1500);
-
-  const bottomObs = new IntersectionObserver(
-    (entries) => {
-      bottomVisible = entries[0].isIntersecting;
-      refresh();
-    },
-    { rootMargin: "0px 0px -80px 0px" },
-  );
-  if (bottomCard) bottomObs.observe(bottomCard);
-
-  disposables.push(() => {
-    window.clearTimeout(showDelay);
-    bottomObs.disconnect();
-  });
-
-  // Single function that opens the modal in a clean state — resets any
-  // error/loading from a previous attempt so the user sees the reveal
-  // afresh every time.
+  // Open in a clean state — clear any error/loading from a prior attempt.
   const openModal = () => {
     if (modalError) modalError.hidden = true;
     modalCta.disabled = false;
@@ -1106,24 +1074,13 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
     modal.showModal();
   };
 
-  // ALL unlock CTAs open the same modal:
-  //   - the sticky bar on mobile
-  //   - the top inline payment block (after karakterinOzu)
-  //   - the bottom inline payment block (after the locked sections)
-  //   - the inline italic "Devamını oku →" link at the end of the
-  //     visible preview paragraph (literary cut point inside the
-  //     karakterinOzu section body)
-  // The modal is the single place that performs the actual unlock and
-  // displays the price — keeps the disclosure consistent regardless of
-  // which CTA the user taps.
-  stickyTrigger.addEventListener("click", openModal);
+  // In-flow entry points: the unlock card button + the inline "Devamını
+  // oku →" link. (The action bar's primary pill is wired by the caller.)
   for (const btn of root.querySelectorAll(
     ".unlock-card .btn-gold-fill, .devamini-oku-inline",
   )) {
     btn.addEventListener("click", openModal);
-    // Inline link uses role="button" + Enter/Space keyboard activation
-    // for accessibility (it's an <a> without href, so default keyboard
-    // handling doesn't fire click).
+    // Inline link is an <a> without href → add Enter/Space activation.
     if (btn.classList.contains("devamini-oku-inline")) {
       btn.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") {
@@ -1134,15 +1091,13 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
     }
   }
 
-  // Modal close affordances: × button, backdrop click, native ESC handler.
-  modalClose.addEventListener("click", () => modal.close());
+  // Close affordances: × button, backdrop click, native ESC.
+  if (modalClose) modalClose.addEventListener("click", () => modal.close());
   modal.addEventListener("click", (ev) => {
-    // Clicking the backdrop (the <dialog> itself, not its inner content)
-    // closes the modal — native <dialog> doesn't do this out of the box.
     if (ev.target === modal) modal.close();
   });
 
-  // Modal CTA → actual unlock. Single source of truth for the action.
+  // CTA → actual unlock.
   modalCta.addEventListener("click", () => {
     performUnlock(id, router, modalCta, modalError, PAYMENT_CTA_LABEL);
   });
@@ -1150,18 +1105,15 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   disposables.push(() => {
     if (modal.open) modal.close();
   });
+
+  return openModal;
 }
 
-// Wires the paid-only feedback sticky CTA + modal. Called only when the
-// reading is unlocked AND no feedback exists yet (data.feedbackGiven is
-// false). Mirrors wireStickyAndModal's shape: a fade-in sticky, a
-// <dialog> modal, disposables for cleanup. The modal holds a 5-star
-// (required) widget + optional textarea; submit posts to /api/feedback
-// and morphs the modal into a thank-you state, then permanently hides
-// the sticky for this reading.
-function wireFeedback({ root, id, disposables }) {
-  const sticky = root.querySelector(".feedback-sticky");
-  const stickyTrigger = root.querySelector(".feedback-sticky-trigger");
+// Wires the feedback modal: the 5-star (required) widget + optional
+// textarea + submit + close affordances. Returns openModal so the action
+// bar's "Yorum" icon can open it. `onSubmitted` is called after a
+// successful submit so the caller can retire the Yorum icon (one-shot).
+function wireFeedbackModal({ root, id, disposables, onSubmitted }) {
   const modal = root.querySelector(".feedback-modal");
   const formEl = root.querySelector(".feedback-form");
   const thanksEl = root.querySelector(".feedback-thanks");
@@ -1171,41 +1123,7 @@ function wireFeedback({ root, id, disposables }) {
   const errorEl = root.querySelector(".feedback-error");
   const closeEl = root.querySelector(".feedback-modal-close");
   const thanksCloseEl = root.querySelector(".feedback-thanks-close");
-  if (!sticky || !modal || !submitEl || stars.length === 0) return;
-
-  // Reveal the sticky a few seconds after mount so it doesn't interrupt
-  // the freshly-unlocked reader — then keep it visible EXCEPT when the
-  // page footer ("Yeni bir okuma") is on screen, so the fixed bar never
-  // covers the footer link at the bottom of the page. Mirrors the unlock
-  // sticky's hide-on-bottom behaviour.
-  sticky.hidden = false;
-  let mountedShown = false;
-  let footerVisible = false;
-  const refresh = () => {
-    const show = mountedShown && !footerVisible;
-    sticky.classList.toggle("is-visible", show);
-    sticky.setAttribute("aria-hidden", show ? "false" : "true");
-  };
-
-  const showDelay = window.setTimeout(() => {
-    mountedShown = true;
-    refresh();
-    // Funnel: the CTA became eligible to show to the user.
-    api.trackEvent(id, "viewed_feedback_cta");
-  }, 6000);
-
-  const footer = root.querySelector(".result-new-reading");
-  let footerObs = null;
-  if (footer) {
-    footerObs = new IntersectionObserver(
-      (entries) => {
-        footerVisible = entries[0].isIntersecting;
-        refresh();
-      },
-      { rootMargin: "0px 0px -40px 0px" },
-    );
-    footerObs.observe(footer);
-  }
+  if (!modal || !submitEl || stars.length === 0) return () => {};
 
   // ----- star rating widget -----
   let rating = 0;
@@ -1239,7 +1157,6 @@ function wireFeedback({ root, id, disposables }) {
     modal.showModal();
     api.trackEvent(id, "clicked_feedback_cta");
   };
-  stickyTrigger.addEventListener("click", openModal);
   if (closeEl) closeEl.addEventListener("click", () => modal.close());
   if (thanksCloseEl) thanksCloseEl.addEventListener("click", () => modal.close());
   modal.addEventListener("click", (ev) => {
@@ -1255,16 +1172,10 @@ function wireFeedback({ root, id, disposables }) {
     try {
       const text = textEl ? textEl.value.trim() : "";
       await api.submitFeedback(id, rating, text);
-      // Morph to thank-you state; permanently retire the sticky for this
-      // reading (matches the server's one-shot semantics).
+      // Morph to the thank-you state; let the caller retire the trigger.
       if (formEl) formEl.hidden = true;
       if (thanksEl) thanksEl.hidden = false;
-      // Permanently retire the sticky for this reading. Flip mountedShown
-      // off so the footer observer can't re-show it, then hide outright.
-      mountedShown = false;
-      sticky.classList.remove("is-visible");
-      sticky.setAttribute("aria-hidden", "true");
-      sticky.hidden = true;
+      if (onSubmitted) onSubmitted();
     } catch (e) {
       submitEl.disabled = false;
       submitEl.textContent = "Müneccime ulaştır";
@@ -1276,16 +1187,16 @@ function wireFeedback({ root, id, disposables }) {
   });
 
   disposables.push(() => {
-    window.clearTimeout(showDelay);
-    if (footerObs) footerObs.disconnect();
     if (modal.open) modal.close();
   });
+
+  return openModal;
 }
 
 // The single unlock card (Lean CTA system). Replaces the old top+bottom
 // payment blocks and the disabled locked-actions blocks. Title + price +
 // text feature-list (what you unlock) + one primary gold-fill button.
-// No click handler here — wireStickyAndModal attaches one (via the
+// No click handler here — wireUnlockModal attaches one (via the
 // `.unlock-card .btn-gold-fill` selector) that opens the reveal modal;
 // the modal's CTA is the single thing that calls performUnlock.
 function makeUnlockCard() {
@@ -1328,7 +1239,7 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
   const root = tpl("tpl-result");
   const kapakSozuEl = root.querySelector(".kapak-sozu");
   const sectionsHost = root.querySelector(".sections-host");
-  const postActions = root.querySelector(".post-actions");
+  const actionBar = root.querySelector(".action-bar");
 
   // Post-payment polling overlay — only shown when ?paid=1 is in the URL.
   // The user is staring at this for up to ~10 seconds while the webhook
@@ -1598,41 +1509,62 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         sectionsHost.appendChild(makeUnlockCard());
       }
 
-      const listenBtn = postActions.querySelector(".action-listen-all");
-      const printBtn = postActions.querySelector(".action-print");
+      // ----- Persistent action bar -----
+      // The primary pill is dual-purpose: free → opens the unlock modal;
+      // paid → the "Baştan Sona Dinle" chain play button. Secondary icons
+      // (PDF / Paylaş / Yorum / Yeni) wire to their actions and show/hide
+      // per state.
+      const barPrimary = actionBar.querySelector(".action-bar-primary");
+      const barPdf = actionBar.querySelector(".ab-pdf");
+      const barShare = actionBar.querySelector(".ab-share");
+      const barFeedback = actionBar.querySelector(".ab-feedback");
+      const barNew = actionBar.querySelector(".ab-new");
+
+      // Secondary icons present in BOTH states:
+      barShare.addEventListener("click", () => handleShare(barShare));
+      barNew.addEventListener("click", () => router.navigate("/"));
 
       if (!isUnlocked) {
-        // Free state: lock the audio + PDF buttons — disabled + lock glyph
-        // + tooltip. They light up on unlock (paid branch below). Interim
-        // approach (clearest signal that they're paid features) until we
-        // revisit this component. Paylaş stays live (sharing the free
-        // preview is a viral-growth lever).
-        for (const btn of [listenBtn, printBtn]) {
-          btn.disabled = true;
-          btn.classList.add("is-locked");
-          if (!btn.querySelector(".lock-glyph")) {
-            btn.insertAdjacentHTML("afterbegin", LOCK_GLYPH_HTML);
-          }
-          btn.title = "Tam okumayla açılır";
-        }
+        // Free: primary pill opens the unlock modal. PDF + Yorum hidden
+        // (they're paid-only). Paylaş + Yeni stay (sharing the free
+        // preview is a viral lever).
+        barPrimary.textContent = "Kaderinin tamamını aç →";
+        barPdf.hidden = true;
+        barFeedback.hidden = true;
+        const openUnlockModal = wireUnlockModal({ root, id, router, disposables });
+        barPrimary.addEventListener("click", openUnlockModal);
       } else {
-        // Paid: "Baştan Sona Dinle" is the primary paid action → promote
-        // it to gold-fill. PDF İndir + Paylaş stay secondary (outline).
-        listenBtn.classList.remove("btn-gold-outline");
-        listenBtn.classList.add("btn-gold-fill");
+        // Paid: the primary pill IS the chain "Baştan Sona Dinle" button.
+        const listenBtn = barPrimary;
+        listenBtn.textContent = LISTEN_IDLE;
+        barPdf.hidden = false;
+        barPdf.addEventListener("click", () => window.print());
 
-        // Sequential playback through all 11 sections using the single
-        // chainAudio element. Cache hits make this near-seamless; cache
-        // misses incur a per-section synthesis delay.
-        // (handled below, after share-button wiring)
-        // Chain queue plays karakterinOzu (preview) → karakterinOzuRest
-        // (the remaining 2/3, no kapakSözü prepend) → the nine locked
-        // sections. The preview audio is already cached in R2 from the
-        // free state, so the chain only triggers one new synthesis
-        // (karakterinOzuRest, on first chain play after unlock). If the
-        // text was too short to split, karakterinOzuRest 404s and the
-        // chain's error handler below treats it as a skip-and-advance,
-        // not a hard error.
+        // Feedback icon → modal, unless already rated (one-shot). On a
+        // successful submit, retire the icon for this reading.
+        if (!data.feedbackGiven) {
+          barFeedback.hidden = false;
+          const openFeedbackModal = wireFeedbackModal({
+            root,
+            id,
+            disposables,
+            onSubmitted: () => {
+              barFeedback.hidden = true;
+            },
+          });
+          barFeedback.addEventListener("click", openFeedbackModal);
+          // Funnel: a paid user has the feedback affordance available.
+          api.trackEvent(id, "viewed_feedback_cta");
+        } else {
+          barFeedback.hidden = true;
+        }
+
+        // Sequential playback: karakterinOzu (preview) → karakterinOzuRest
+        // (remaining 2/3, no kapakSözü prepend) → the nine locked sections.
+        // Preview audio is already cached from the free state, so the chain
+        // only triggers one new synthesis (karakterinOzuRest). If the text
+        // was too short to split, karakterinOzuRest 404s and the error
+        // handler below skips-and-advances rather than hard-stopping.
         const queue = [
           "karakterinOzu",
           "karakterinOzuRest",
@@ -1646,22 +1578,19 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
           queueIdx += 1;
           if (queueIdx >= queue.length) {
             chainActive = false;
-            listenBtn.textContent = "Baştan Sona Dinle";
+            listenBtn.textContent = LISTEN_IDLE;
             return;
           }
           chainAudio.src = api.ttsUrl(id, queue[queueIdx]);
           chainAudio.play().catch(() => {
             chainActive = false;
-            listenBtn.textContent = "Baştan Sona Dinle";
+            listenBtn.textContent = LISTEN_IDLE;
           });
         };
         chainAudio.addEventListener("ended", onEndedAdvance);
         chainAudio.addEventListener("error", () => {
-          // Special case: karakterinOzuRest 404s when the karakterinOzu
-          // text was too short to split (preview already covers all of
-          // it). Treat as a graceful skip-and-advance, not an error —
-          // the user heard the meaningful audio in the preview segment
-          // immediately before and would be confused by a hard stop.
+          // karakterinOzuRest 404 (text too short to split) → graceful
+          // skip-and-advance, not an error.
           if (
             chainActive &&
             queue[queueIdx] === "karakterinOzuRest" &&
@@ -1670,18 +1599,14 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
             onEndedAdvance();
             return;
           }
-          // Real TTS pipeline failure during chain playback. Surface the
-          // same in-voice copy as the per-section player, briefly hijacking
-          // the button label since there's no inline status slot here.
-          // Disable the button for a few seconds so the user reads the
-          // message instead of immediately re-clicking on the now-default
-          // label.
+          // Real TTS failure during chain playback — surface the in-voice
+          // copy on the pill briefly, then revert.
           chainActive = false;
           listenBtn.textContent =
             "Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.";
           listenBtn.disabled = true;
           window.setTimeout(() => {
-            listenBtn.textContent = "Baştan Sona Dinle";
+            listenBtn.textContent = LISTEN_IDLE;
             listenBtn.disabled = false;
           }, 4000);
         });
@@ -1690,48 +1615,30 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
           if (chainActive) {
             chainActive = false;
             chainAudio.pause();
-            listenBtn.textContent = "Baştan Sona Dinle";
+            listenBtn.textContent = LISTEN_IDLE;
             return;
           }
-          // Funnel tracking — fire only on the start of a chain play,
-          // not on pause/stop. Per-section listened_locked flags will
-          // also fire as the chain advances through locked sections,
-          // since each section playback flows through makeAudioPlayer.
-          // (Not quite — chainAudio is a separate element. But the
-          // chain bucket is its own signal anyway.)
+          // Funnel: fire only on the start of a chain play, not pause/stop.
           api.trackEvent(id, "listened_chain");
           chainActive = true;
           queueIdx = 0;
           chainAudio.src = api.ttsUrl(id, queue[queueIdx]);
           chainAudio.play().catch(() => {
             chainActive = false;
-            listenBtn.textContent = "Baştan Sona Dinle";
+            listenBtn.textContent = LISTEN_IDLE;
           });
-          listenBtn.textContent = "Sesi Durdur";
+          listenBtn.textContent = LISTEN_PLAYING;
         });
-
-        printBtn.addEventListener("click", () => window.print());
       }
 
-      // Wire every share button on the page (both the JS-built top
-      // locked-actions block and the template's bottom one). Share works
-      // regardless of unlock state — the locked preview is itself a hook
-      // for the recipient.
-      for (const btn of root.querySelectorAll(".action-share")) {
-        btn.addEventListener("click", () => handleShare(btn));
-      }
-
-      // Sticky CTA + reveal modal. Only when not unlocked. The sticky is
-      // mobile-only via CSS @media; the JS just manages visibility based
-      // on scroll position (show after karakterinOzu scrolls out, hide
-      // when the bottom payment block scrolls in).
-      if (!isUnlocked) {
-        wireStickyAndModal({ root, id, router, sectionsHost, disposables });
-      } else if (!data.feedbackGiven) {
-        // Paid + no feedback yet → wire the feedback sticky + modal.
-        // Already-rated readings skip this entirely (one-shot).
-        wireFeedback({ root, id, disposables });
-      }
+      // Reveal the bar ~1.5s after mount (don't slam over the autoplay),
+      // then keep it visible. The result view has bottom padding so the
+      // bar never permanently covers content.
+      const barShowDelay = window.setTimeout(() => {
+        actionBar.classList.add("is-visible");
+        actionBar.setAttribute("aria-hidden", "false");
+      }, 1500);
+      disposables.push(() => window.clearTimeout(barShowDelay));
     } catch (err) {
       sectionsHost.replaceChildren();
       kapakSozuEl.textContent = "";
