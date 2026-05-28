@@ -8,6 +8,16 @@ import type { Env } from "./types";
 
 const STRIPE_API_BASE = "https://api.stripe.com/v1";
 
+// Pinned API version for the promo (coupon + promotion_code) requests only.
+// Newer default account API versions changed the promotion_codes endpoint
+// so that the top-level `coupon` param is rejected ("Received unknown
+// parameter: coupon") under Stripe's coupon/discounts refactor. We coded
+// these helpers against the classic coupon→promotion_code shape, so we pin
+// a version that still accepts it. NOTE: this header is intentionally NOT
+// applied to checkout-session / customer / webhook calls — those work on
+// the account default and pinning could change their response parsing.
+const STRIPE_PROMO_API_VERSION = "2024-06-20";
+
 const PRODUCT_NAME = "Yıldızname — Tam Okuma";
 const PRODUCT_DESCRIPTION =
   "Kişiye özel yıldızname okuması — 10 bölüm yazılı içerik ve müneccim sesiyle sesli okuma.";
@@ -275,6 +285,128 @@ export async function fetchSessionEmail(
     customer_email?: string | null;
   };
   return session.customer_details?.email ?? session.customer_email ?? null;
+}
+
+// Random promo code suffix: 4 chars from an unambiguous alphabet (no
+// O/0/I/1) so codes are easy to read aloud / type from an email.
+function randomPromoCode(prefix: string): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  let suffix = "";
+  for (const b of bytes) suffix += alphabet[b % alphabet.length];
+  return `${prefix}-${suffix}`;
+}
+
+export interface CreatedPromo {
+  couponId: string;
+  promotionCodeId: string;
+  code: string;
+}
+
+// Create a single-use percentage-off promo: a Stripe coupon (duration
+// once) + a promotion_code that wraps it. Used by the admin Ops page for
+// apology / win-back codes. The promotion_code `code` must be unique
+// account-wide, so we retry once with a fresh suffix on a collision (the
+// coupon is created once and reused across attempts — an orphan coupon
+// is harmless if both attempts somehow fail).
+export async function createPromo(
+  env: Env,
+  args: {
+    readingId: string;
+    percentOff: number;
+    expiresAtUnix: number | null;
+    maxRedemptions: number;
+    codePrefix: string;
+  },
+): Promise<CreatedPromo> {
+  const headers = {
+    Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Stripe-Version": STRIPE_PROMO_API_VERSION,
+  };
+
+  // 1. Coupon
+  const couponParams = new URLSearchParams();
+  couponParams.append("percent_off", String(args.percentOff));
+  couponParams.append("duration", "once");
+  couponParams.append("name", `Yıldızname %${args.percentOff} indirim`);
+  couponParams.append("metadata[reading_id]", args.readingId);
+  const couponRes = await fetch(`${STRIPE_API_BASE}/coupons`, {
+    method: "POST",
+    headers,
+    body: couponParams,
+  });
+  if (!couponRes.ok) {
+    const body = await couponRes.text().catch(() => "");
+    console.error("[stripe] coupon create failed", {
+      status: couponRes.status,
+      body: body.slice(0, 300),
+    });
+    throw new Error(`Stripe coupon ${couponRes.status}`);
+  }
+  const coupon = (await couponRes.json()) as { id: string };
+
+  // 2. Promotion code (retry once on a code collision)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const code = randomPromoCode(args.codePrefix);
+    const pcParams = new URLSearchParams();
+    pcParams.append("coupon", coupon.id);
+    pcParams.append("code", code);
+    pcParams.append("max_redemptions", String(args.maxRedemptions));
+    if (args.expiresAtUnix) {
+      pcParams.append("expires_at", String(args.expiresAtUnix));
+    }
+    pcParams.append("metadata[reading_id]", args.readingId);
+    const pcRes = await fetch(`${STRIPE_API_BASE}/promotion_codes`, {
+      method: "POST",
+      headers,
+      body: pcParams,
+    });
+    if (pcRes.ok) {
+      const pc = (await pcRes.json()) as { id: string; code: string };
+      return {
+        couponId: coupon.id,
+        promotionCodeId: pc.id,
+        code: pc.code ?? code,
+      };
+    }
+    const body = await pcRes.text().catch(() => "");
+    console.warn("[stripe] promotion_code create failed", {
+      attempt,
+      status: pcRes.status,
+      body: body.slice(0, 300),
+    });
+  }
+  throw new Error("Stripe promotion_code creation failed");
+}
+
+// Live redemption status for a promotion code (Ops page used/not-used).
+// Returns null on lookup failure so the caller can show "—" gracefully.
+export async function fetchPromoRedemptions(
+  env: Env,
+  promotionCodeId: string,
+): Promise<{ timesRedeemed: number; active: boolean } | null> {
+  const res = await fetch(
+    `${STRIPE_API_BASE}/promotion_codes/${encodeURIComponent(promotionCodeId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+        "Stripe-Version": STRIPE_PROMO_API_VERSION,
+      },
+    },
+  );
+  if (!res.ok) {
+    console.warn("[stripe] promo status fetch failed", {
+      promotionCodeId,
+      status: res.status,
+    });
+    return null;
+  }
+  const pc = (await res.json()) as {
+    times_redeemed?: number;
+    active?: boolean;
+  };
+  return { timesRedeemed: pc.times_redeemed ?? 0, active: pc.active ?? true };
 }
 
 // Verify the Stripe webhook signature header. Header format is

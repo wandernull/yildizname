@@ -21,7 +21,7 @@ Strictly the global "Web stack defaults" from `~/.claude/CLAUDE.md`:
 - **Compute:** Cloudflare Workers (`compatibility_date = 2025-05-01`, `nodejs_compat`)
 - **Framework:** Hono (single `src/index.ts` mounts all routes)
 - **Static assets:** Workers Assets binding (`[assets] directory = "./public"`, `not_found_handling = "none"`; SPA fallback handled inside the Worker)
-- **Relational data:** D1 — single `readings` table. Schema = `migrations/0001_init.sql` + 0002 status/error + 0003 stripe metadata + 0004 funnel analytics + 0005 client_kind + 0006 feedback. All applied to local + remote.
+- **Relational data:** D1 — `readings` table + a `promos` table (1 reading → many promos). Schema = `migrations/0001_init.sql` + 0002 status/error + 0003 stripe metadata + 0004 funnel analytics + 0005 client_kind + 0006 feedback + 0007 customer_email + 0008 promos. All applied to local + remote.
 - **Edge state:** KV — not used (no sessions, rate limits, or caches yet)
 - **Object storage:** R2 — bucket `yildizname-tts` caches synthesized audio MP3s at key `tts/{prefix}/{readingId}/{section}.mp3` (current prefix `tts/v3`). 15-day lifecycle rule (set out-of-band via `wrangler r2 bucket lifecycle add`). Bump the prefix in `src/lib/tts.ts` whenever audio shaping/content changes (old objects age out via the lifecycle rule).
 - **Language:** TypeScript, strict; `@cloudflare/workers-types` for Worker globals
@@ -47,8 +47,10 @@ API:
 - `POST /api/feedback/:id` — paid-only (403 if locked); `{ rating 1-5 required, text? }`; first-submission-wins
 
 Admin (HTTP Basic Auth via `ADMIN_USER`/`ADMIN_PASS`):
-- `GET /admin` — funnel analytics table · `GET /admin/ratings` — feedback/ratings · `GET /admin/ops` — reset-payment ops
+- `GET /admin` — funnel analytics table · `GET /admin/ratings` — feedback/ratings · `GET /admin/ops` — ops (reset-payment + email sync + promo generation)
 - `POST /api/admin/reset-payment/:id` — clears unlocked + Stripe metadata + feedback (no Stripe refund); PRG redirect
+- `POST /api/admin/sync-email/:id` — backfills `customer_email` from the Stripe session; PRG redirect
+- `POST /api/admin/generate-promo/:id` — creates a Stripe coupon + single-use `YILDIZ-XXXX` promotion code (percent from form, 30-day expiry), mirrors into `promos`; PRG redirect. Promo requests pin `Stripe-Version: 2024-06-20` (account default rejects the classic `coupon` param)
 
 ## CI/CD
 GitHub Actions workflow at `.github/workflows/deploy.yml`:

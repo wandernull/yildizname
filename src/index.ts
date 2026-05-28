@@ -6,6 +6,8 @@ import {
   countPaidReadings,
   getReading,
   insertReading,
+  insertPromo,
+  listPromosForReading,
   listReadingsForAdmin,
   listReadingsWithFeedback,
   markEvent,
@@ -17,8 +19,10 @@ import {
 import { generateYildizname } from "./lib/llm";
 import {
   createCheckoutSession,
+  createPromo,
   createStripeCustomer,
   fetchInvoiceMetadata,
+  fetchPromoRedemptions,
   fetchSessionEmail,
   verifyStripeSignature,
 } from "./lib/stripe";
@@ -35,6 +39,7 @@ import {
   TRACK_EVENTS,
   type Env,
   type FormData,
+  type Promo,
   type Reading,
   type TrackEvent,
 } from "./lib/types";
@@ -769,6 +774,16 @@ function renderAdminShell(
     .ops-note { max-width: 560px; padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 1.4rem; font-size: 0.9rem; }
     .ops-note.ok { background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.4); color: #7be3a0; }
     .ops-note.warn { background: rgba(201,168,76,0.12); border: 1px solid rgba(201,168,76,0.35); color: var(--gold); }
+    .ops-empty { color: var(--dim); font-style: italic; margin: 0 0 1rem; font-size: 0.88rem; }
+    .promo-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.45rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.85rem; }
+    .promo-code { font-family: ui-monospace, monospace; color: var(--gold-light, #e8d08a); background: rgba(201,168,76,0.14); padding: 2px 7px; border-radius: 4px; }
+    .promo-meta { color: var(--dim); }
+    .promo-used { color: #4ade80; font-weight: 600; margin-left: auto; }
+    .promo-unused { color: var(--dim); margin-left: auto; }
+    .promo-form { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+    .promo-form label { color: var(--dim); display: flex; align-items: center; gap: 0.3rem; }
+    .promo-form input { width: 64px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--fg); padding: 0.4rem 0.5rem; font-size: 0.9rem; }
+    .promo-form-note { color: var(--dim); font-size: 0.8rem; }
   </style>
 </head>
 <body>
@@ -930,9 +945,12 @@ function renderOpsBody(
     notFound: boolean;
     resetDone: boolean;
     emailSynced: string | null;
+    promoResult: string | null;
+    promos: Array<{ promo: Promo; timesRedeemed: number | null }>;
   },
 ): string {
-  const { lookupId, notFound, resetDone, emailSynced } = opts;
+  const { lookupId, notFound, resetDone, emailSynced, promoResult, promos } =
+    opts;
 
   let notice = "";
   if (resetDone) {
@@ -941,6 +959,10 @@ function renderOpsBody(
     notice = `<div class="ops-note ok">✓ E-posta Stripe'tan alındı ve kaydedildi.</div>`;
   } else if (emailSynced === "0") {
     notice = `<div class="ops-note warn">Stripe session'da e-posta bulunamadı.</div>`;
+  } else if (promoResult === "1") {
+    notice = `<div class="ops-note ok">✓ Promosyon oluşturuldu.</div>`;
+  } else if (promoResult === "0") {
+    notice = `<div class="ops-note warn">Promosyon oluşturulamadı — Stripe hatası.</div>`;
   } else if (notFound) {
     notice = `<div class="ops-note warn">Bu id ile okuma bulunamadı.</div>`;
   }
@@ -978,6 +1000,44 @@ function renderOpsBody(
     <button class="ops-btn" type="submit">E-postayı Stripe'tan al →</button>
   </form>`;
     }
+
+    // Promosyonlar — list existing promos with live used/not-used status,
+    // plus a generate form (% editable, defaults 25; 30-day, single-use,
+    // YILDIZ-XXXX). Status comes from Stripe (times_redeemed), so it's
+    // always current.
+    const promoRows =
+      promos.length === 0
+        ? `<p class="ops-empty">Henüz promosyon yok.</p>`
+        : promos
+            .map(({ promo, timesRedeemed }) => {
+              const created = promo.createdAt.replace("T", " ").slice(0, 10);
+              const exp = promo.expiresAt
+                ? promo.expiresAt.slice(0, 10)
+                : "süresiz";
+              const used =
+                timesRedeemed == null
+                  ? `<span class="dim">?</span>`
+                  : timesRedeemed > 0
+                    ? `<span class="promo-used">Kullanıldı (${timesRedeemed})</span>`
+                    : `<span class="promo-unused">Kullanılmadı</span>`;
+              return `<div class="promo-row">
+        <code class="promo-code">${esc(promo.code)}</code>
+        <span class="promo-meta">%${promo.percentOff ?? "—"} · ${esc(exp)} · ${created}</span>
+        ${used}
+      </div>`;
+            })
+            .join("\n");
+
+    detail += `
+  <div class="ops-card">
+    <h2>Promosyonlar</h2>
+    ${promoRows}
+    <form method="post" action="/api/admin/generate-promo/${esc(reading.id)}" class="promo-form">
+      <label>%<input type="number" name="percent" value="25" min="1" max="100" /></label>
+      <span class="promo-form-note">30 gün · tek kullanım</span>
+      <button class="ops-btn" type="submit">Promosyon oluştur →</button>
+    </form>
+  </div>`;
 
     if (reading.unlocked) {
       // The confirm() interpolates only the id (a UUID — no quotes), never
@@ -1023,16 +1083,40 @@ app.get("/admin/ops", async (c) => {
   const lookupId = c.req.query("id") ?? "";
   const resetDone = c.req.query("reset") === "1";
   const emailSynced = c.req.query("email") ?? null;
+  const promoResult = c.req.query("promo") ?? null;
   let reading: Reading | null = null;
   let notFound = false;
+  let promos: Array<{ promo: Promo; timesRedeemed: number | null }> = [];
   if (lookupId) {
     reading = await getReading(c.env.DB, lookupId);
     notFound = reading === null;
+    if (reading) {
+      // Load promos + fetch each one's live redemption status from Stripe
+      // (Stripe is the source of truth for used/not-used). Few per reading,
+      // so the extra calls are fine for an admin page.
+      const rows = await listPromosForReading(c.env.DB, reading.id);
+      promos = await Promise.all(
+        rows.map(async (promo) => {
+          const status = await fetchPromoRedemptions(
+            c.env,
+            promo.stripePromotionCodeId,
+          );
+          return { promo, timesRedeemed: status?.timesRedeemed ?? null };
+        }),
+      );
+    }
   }
   return c.html(
     renderAdminShell(
       "ops",
-      renderOpsBody(reading, { lookupId, notFound, resetDone, emailSynced }),
+      renderOpsBody(reading, {
+        lookupId,
+        notFound,
+        resetDone,
+        emailSynced,
+        promoResult,
+        promos,
+      }),
     ),
   );
 });
@@ -1067,6 +1151,53 @@ app.post("/api/admin/sync-email/:id", async (c) => {
     `/admin/ops?id=${encodeURIComponent(id)}&email=${synced}`,
     303,
   );
+});
+
+// Generate a single-use percentage-off promo for a reading (admin Ops).
+// Reads `percent` from the form (default 25, clamped 1-100); 30-day
+// expiry; YILDIZ-XXXX code. Creates the Stripe coupon + promotion_code,
+// persists it, redirects back showing the new code.
+const PROMO_EXPIRY_DAYS = 30;
+app.post("/api/admin/generate-promo/:id", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const id = c.req.param("id");
+  const reading = await getReading(c.env.DB, id);
+  if (!reading) {
+    return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}`, 303);
+  }
+
+  const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  let percent = Math.round(Number((body as { percent?: unknown }).percent));
+  if (!Number.isFinite(percent)) percent = 25;
+  percent = Math.min(100, Math.max(1, percent));
+
+  const expiresAtUnix =
+    Math.floor(Date.now() / 1000) + PROMO_EXPIRY_DAYS * 24 * 60 * 60;
+
+  try {
+    const created = await createPromo(c.env, {
+      readingId: id,
+      percentOff: percent,
+      expiresAtUnix,
+      maxRedemptions: 1,
+      codePrefix: "YILDIZ",
+    });
+    await insertPromo(c.env.DB, {
+      id: crypto.randomUUID(),
+      readingId: id,
+      code: created.code,
+      stripeCouponId: created.couponId,
+      stripePromotionCodeId: created.promotionCodeId,
+      percentOff: percent,
+      expiresAt: new Date(expiresAtUnix * 1000).toISOString(),
+      maxRedemptions: 1,
+    });
+    console.log("[admin] promo generated", { id, code: created.code, percent });
+    return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}&promo=1`, 303);
+  } catch (err) {
+    console.error("[admin] promo generation failed", { id, err });
+    return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}&promo=0`, 303);
+  }
 });
 
 // ----- SPA fallback ---------------------------------------------------------

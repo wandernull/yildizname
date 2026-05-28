@@ -1,5 +1,6 @@
 import type {
   FormData,
+  Promo,
   Reading,
   ReadingStatus,
   TrackEvent,
@@ -338,6 +339,86 @@ export async function setCustomerEmail(
     .prepare(`UPDATE readings SET customer_email = ? WHERE id = ?`)
     .bind(email, id)
     .run();
+}
+
+interface PromoRow {
+  id: string;
+  reading_id: string;
+  code: string;
+  stripe_coupon_id: string;
+  stripe_promotion_code_id: string;
+  percent_off: number | null;
+  expires_at: string | null;
+  max_redemptions: number | null;
+  created_at: string;
+}
+
+function rowToPromo(row: PromoRow): Promo {
+  return {
+    id: row.id,
+    readingId: row.reading_id,
+    code: row.code,
+    stripeCouponId: row.stripe_coupon_id,
+    stripePromotionCodeId: row.stripe_promotion_code_id,
+    percentOff: row.percent_off,
+    expiresAt: row.expires_at,
+    maxRedemptions: row.max_redemptions,
+    createdAt: row.created_at,
+  };
+}
+
+// Persist a generated promo (admin Ops page). Stripe is the source of
+// truth for redemption status — we only store the metadata + the Stripe
+// ids needed to look that status up later.
+export async function insertPromo(
+  db: D1Database,
+  p: {
+    id: string;
+    readingId: string;
+    code: string;
+    stripeCouponId: string;
+    stripePromotionCodeId: string;
+    percentOff: number | null;
+    expiresAt: string | null;
+    maxRedemptions: number | null;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO promos
+         (id, reading_id, code, stripe_coupon_id, stripe_promotion_code_id,
+          percent_off, expires_at, max_redemptions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      p.id,
+      p.readingId,
+      p.code,
+      p.stripeCouponId,
+      p.stripePromotionCodeId,
+      p.percentOff,
+      p.expiresAt,
+      p.maxRedemptions,
+    )
+    .run();
+}
+
+// All promos for a reading, newest first (Ops page listing).
+export async function listPromosForReading(
+  db: D1Database,
+  readingId: string,
+): Promise<Promo[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, reading_id, code, stripe_coupon_id, stripe_promotion_code_id,
+              percent_off, expires_at, max_redemptions, created_at
+         FROM promos
+        WHERE reading_id = ?
+        ORDER BY created_at DESC`,
+    )
+    .bind(readingId)
+    .all<PromoRow>();
+  return (result.results ?? []).map(rowToPromo);
 }
 
 // Admin op (the /admin Ops page): roll a reading back to its free,

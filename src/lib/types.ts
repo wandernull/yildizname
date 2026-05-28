@@ -112,6 +112,21 @@ export interface Reading {
   clickedFeedbackCta: boolean;
 }
 
+// A promo code generated for a reading from the /admin Ops page
+// (migration 0008). Mirrors the Stripe coupon + promotion_code ids so the
+// Ops page can fetch live redemption status. One reading → many promos.
+export interface Promo {
+  id: string;
+  readingId: string;
+  code: string;
+  stripeCouponId: string;
+  stripePromotionCodeId: string;
+  percentOff: number | null;
+  expiresAt: string | null;
+  maxRedemptions: number | null;
+  createdAt: string;
+}
+
 // Worker bindings, declared via wrangler.toml. The wrangler types generator
 // can produce a worker-configuration.d.ts but we keep this hand-rolled mirror
 // so the file is reviewable in the repo.
