@@ -1,7 +1,7 @@
 # Yıldızname
 
 ## Elevator pitch
-A Turkish mystical astrology web app: an Ottoman astronomer (müneccim) style birth reading, delivered as an animated night-sky experience with prose + Turkish TTS audio. A free "Karakterin Özü" section hooks the user; the remaining nine sections unlock for 250 ₺.
+A Turkish mystical astrology web app: an Ottoman astronomer (müneccim) style birth reading, delivered as an animated night-sky experience with prose + Turkish TTS audio. The free preview shows the kapakSözü + the first ~1/3 of the "Karakterin Özü" section (the rest blurred behind an inline paywall); the full reading — all 10 sections + müneccim-voice audio — unlocks for **349,99 ₺** via Stripe Checkout.
 
 ## Plain-language description
 - For a 7-year-old: A magical website that whispers your fortune like a storyteller under the stars.
@@ -11,7 +11,7 @@ A Turkish mystical astrology web app: an Ottoman astronomer (müneccim) style bi
 Turkish-speaking adults (~25–55) curious about mysticism, family-name and birth-based readings, and willing to pay a small premium for a personalized, beautifully presented experience. Mobile-first — most traffic is expected from Instagram / TikTok referrals.
 
 ## Architecture
-Single-component web project. The project folder *is* the app folder (no `-api` / `-app` split). One Cloudflare Worker serves both the JSON API (`/api/*`) and the vanilla HTML/CSS/JS frontend (`/`, `/form`, `/loading`, `/result/:id`) through the Workers Assets binding. The frontend is a single SPA shell driven by the History API — no frontend framework, no build step.
+Single-component web project. The project folder *is* the app folder (no `-api` / `-app` split). One Cloudflare Worker serves both the JSON API (`/api/*`) and the vanilla HTML/CSS/JS frontend (`/`, `/form`, `/loading`, `/okuma/:id`) through the Workers Assets binding. The frontend is a single SPA shell driven by the History API — no frontend framework, no build step. There is also a server-rendered, Basic-Auth-protected backoffice at `/admin`, `/admin/ratings`, and `/admin/ops`.
 
 Production lives on the apex **https://yildizna.me**. `www.yildizna.me` is also attached as a Worker Custom Domain, but Hono middleware in `src/index.ts` 301s any `www.*` request to the apex with path + query preserved, so the canonical hostname is the bare apex. The `*.workers.dev` URL still resolves as well.
 
@@ -21,25 +21,34 @@ Strictly the global "Web stack defaults" from `~/.claude/CLAUDE.md`:
 - **Compute:** Cloudflare Workers (`compatibility_date = 2025-05-01`, `nodejs_compat`)
 - **Framework:** Hono (single `src/index.ts` mounts all routes)
 - **Static assets:** Workers Assets binding (`[assets] directory = "./public"`, `not_found_handling = "none"`; SPA fallback handled inside the Worker)
-- **Relational data:** D1 — single `readings` table, schema in `migrations/0001_init.sql`
-- **Edge state:** KV — not used in v1 (no sessions, rate limits, or caches yet)
-- **Object storage:** R2 — bucket `yildizname-tts` caches synthesized audio MP3s at key `tts/{readingId}/{section}.mp3`. 15-day lifecycle rule (set out-of-band via `wrangler r2 bucket lifecycle add`). Free-tier sized: ~600 full readings cached in any 15-day window before storage matters.
+- **Relational data:** D1 — single `readings` table. Schema = `migrations/0001_init.sql` + 0002 status/error + 0003 stripe metadata + 0004 funnel analytics + 0005 client_kind + 0006 feedback. All applied to local + remote.
+- **Edge state:** KV — not used (no sessions, rate limits, or caches yet)
+- **Object storage:** R2 — bucket `yildizname-tts` caches synthesized audio MP3s at key `tts/{prefix}/{readingId}/{section}.mp3` (current prefix `tts/v3`). 15-day lifecycle rule (set out-of-band via `wrangler r2 bucket lifecycle add`). Bump the prefix in `src/lib/tts.ts` whenever audio shaping/content changes (old objects age out via the lifecycle rule).
 - **Language:** TypeScript, strict; `@cloudflare/workers-types` for Worker globals
 - **LLM:** `@anthropic-ai/sdk` calling `claude-sonnet-4-5` with the Ottoman-müneccim system prompt in `src/lib/llm.ts`. Output is strict JSON validated against `YildiznameSections`. One automatic retry on parse failure.
 - **Frontend UI:** Vanilla HTML/CSS/JS served from `public/`. Cormorant Garamond + Noto Serif loaded from Google Fonts. Canvas star field, CSS keyframes, Web Animations API. No bundler.
-- **TTS:** ElevenLabs `eleven_multilingual_v2` via direct streaming `fetch` from the Worker. Voice `J17lijyP1BHYcM7ld0Rg` with slow ritualistic settings (`speed 0.85`, `stability 0.6`, `style 0.4`, speaker boost on). The Worker tees the stream — one branch goes to the client `<audio>` element, the other is buffered into a `Uint8Array` and written to R2 (R2.put requires known content length, can't take a chunked stream directly). Frontend uses a plain `<audio src="/api/tts/{id}/{section}">` element; no Web Speech API. The `karakterinOzu` audio prepends the `kapakSözü` so the autoplay's first words are the literary mısra.
-- **Payments:** `PaymentProvider` interface in `src/lib/payment.ts` + `MockPaymentProvider` that always succeeds. The real provider will be **Stripe** (Checkout Session + signed webhook). iyzico is explicitly **not** in scope.
+- **TTS:** ElevenLabs `eleven_multilingual_v2` via direct streaming `fetch` from the Worker. Voice `J17lijyP1BHYcM7ld0Rg` (slow ritualistic settings). The Worker tees the stream — one branch to the client `<audio>`, the other buffered into a `Uint8Array` and written to R2 (R2.put needs a known length). `karakterinOzu` is split into two cached audio variants to avoid double-paying ElevenLabs on conversion: **`karakterinOzu`** = kapakSözü + the 1/3 preview (free state); **`karakterinOzuRest`** = just the remaining 2/3, no kapakSözü prepend (synthesized only after unlock). The client plays preview + rest back-to-back. Text shaping lives only in `src/lib/tts.ts → buildSpeechText()`; the split point in `src/lib/text.ts → splitKarakterinOzu()`.
+- **Payments:** **Stripe Checkout, LIVE.** Direct Stripe REST (no SDK) in `src/lib/stripe.ts`; Web Crypto HMAC verifies the webhook. `MockPaymentProvider` / the `PaymentProvider` interface were deleted. iyzico explicitly **not** in scope. `/api/unlock` pre-creates a Stripe Customer (`preferred_locales=['tr']` for a Turkish invoice) then a Checkout Session (inline `price_data` 34999 kuruş, `automatic_tax` inclusive `txcd_10000000`, `invoice_creation`, `allow_promotion_codes`, `custom_text` brand attribution). `/api/stripe/webhook` is idempotent. Legal entity on the invoice + Pay button: Back of the Envelope B.V., Almere NL, KVK 97838810, VAT NL868254010B01.
 
 ## Routes
-- `GET /` — landing
-- `GET /form` — multi-step form (SPA route, served via SPA fallback)
-- `GET /loading` — mystical wait screen during the LLM call (SPA route)
-- `GET /result/:id` — kapakSözü + free section + 9 locked sections + payment CTA (SPA route)
-- `GET /result/:id?unlocked=true` — all sections revealed + chained TTS + print/PDF (SPA route)
-- `POST /api/generate` — calls Claude, inserts a row into D1, returns `{ id, status, freeSection, kapakSozu }`
-- `GET /api/reading/:id` — returns the free preview, plus locked sections only when `reading.unlocked = 1`
-- `POST /api/unlock` — runs the mock payment provider, flips `unlocked` to 1, returns `{ success, transactionId }` (idempotent)
-- `GET /api/tts/:readingId/:section` — returns `audio/mpeg`. `karakterinOzu` always allowed; the 9 locked sections require `reading.unlocked = 1` (403 otherwise). Cache hits stream from R2 (~1s); cache misses synthesize via ElevenLabs (~15–35s for ~2 minutes of audio), tee the response, and write the buffered bytes to R2 in `waitUntil` for next-call hits.
+SPA (served via the Worker's SPA fallback):
+- `GET /` landing · `GET /form` multi-step form · `GET /loading` wait screen
+- `GET /okuma/:id` — kapakSözü + 1/3 preview + inline paywall + 9 locked sections + action bar
+- `GET /okuma/:id?paid=1&session=…` — post-Stripe redirect; polling overlay → success card
+- SEO content pages: `/yildizname`, `/ebced`, `/muneccim`, `/menzil`, `/sss`, `/gizlilik`, `/kosullar` (+ `/privacy`→`/gizlilik`, `/terms`→`/kosullar` 301s)
+
+API:
+- `POST /api/generate` — calls Claude, inserts a row, returns `{ id, status, freeSection (preview), kapakSozu }`
+- `GET /api/reading/:id` — free state returns preview + `karakterinOzuTeaser` (one blurred sentence); unlocked returns full text + 9 sections + invoice URLs + `feedbackGiven`
+- `POST /api/unlock` — pre-creates a Stripe Customer + Checkout Session, returns `{ url, sessionId }` (or `{ alreadyUnlocked: true }`)
+- `POST /api/stripe/webhook` — HMAC-verified; on `checkout.session.completed` flips `unlocked`, fetches invoice meta (idempotent)
+- `GET /api/tts/:readingId/:section` — `audio/mpeg`. Free: `karakterinOzu`. Paid-only: `karakterinOzuRest` + the 9 locked sections (403 otherwise). R2 cache hit → stream; miss → synth + tee to R2.
+- `POST /api/track/:id` — idempotent funnel flags (scrolled_past_free, listened_free/locked/chain, clicked_unlock, viewed/clicked_feedback_cta)
+- `POST /api/feedback/:id` — paid-only (403 if locked); `{ rating 1-5 required, text? }`; first-submission-wins
+
+Admin (HTTP Basic Auth via `ADMIN_USER`/`ADMIN_PASS`):
+- `GET /admin` — funnel analytics table · `GET /admin/ratings` — feedback/ratings · `GET /admin/ops` — reset-payment ops
+- `POST /api/admin/reset-payment/:id` — clears unlocked + Stripe metadata + feedback (no Stripe refund); PRG redirect
 
 ## CI/CD
 GitHub Actions workflow at `.github/workflows/deploy.yml`:
@@ -59,14 +68,18 @@ Migrations are **not** auto-applied. Run `npm run db:migrate:remote` manually wh
 ## Credentials
 This project uses `~/.gizem-creds`.
 
-Required env vars:
-- `CLOUDFLARE_API_TOKEN` — for `wrangler deploy` and `gh secret set`
-- `GH_TOKEN` — for `gh repo create` and `gh secret set` (active account: `wandernull`)
-- `ANTHROPIC_API_KEY` — passed to the Worker via `wrangler secret put` (prod) or `.dev.vars` (local)
-- `ELEVENLABS_API_KEY` — same handling as Anthropic; Text-to-Speech scope only
+From `~/.gizem-creds` (machine env): `CLOUDFLARE_API_TOKEN`, `GH_TOKEN` (account: `wandernull`).
 
-Future:
-- `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` once the real payment provider is wired
+Worker secrets (prod via `wrangler secret put`, local via `.dev.vars`) — 6 set in prod:
+- `ANTHROPIC_API_KEY` — Claude
+- `ELEVENLABS_API_KEY` — TTS
+- `STRIPE_SECRET_KEY` — **live** `sk_live_…` (rotated before go-live)
+- `STRIPE_WEBHOOK_SECRET` — `whsec_…` from the prod webhook endpoint
+- `ADMIN_USER` + `ADMIN_PASS` — HTTP Basic Auth for `/admin*`
+
+Test mode (local `.dev.vars`) uses `sk_test_…` + a `stripe listen` whsec.
+
+**Shell gotcha:** `source ~/.gizem-creds` errors in non-interactive shells (gvm init). Run commands via `/bin/bash --noprofile --norc -c '…'` and extract the one var you need by grepping the file. `git push` needs the one-off token URL (Keychain offers the wrong account): `git -c credential.helper= push "https://wandernull:${GH_TOKEN}@github.com/wandernull/yildizname.git" main`.
 
 ## Living plan
 The living plan, status, and decisions log is `./PROJECT_PLAN.md`. Update it whenever a change has lasting impact so future sessions can pick up where this one left off.
