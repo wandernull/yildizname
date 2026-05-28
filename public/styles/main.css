@@ -454,19 +454,12 @@ h4 {
   margin: 0 0 1.25rem;
   letter-spacing: 0.015em;
 }
-.unlock-modal-body {
-  font-family: var(--font-body);
-  color: var(--silver);
-  line-height: 1.7;
-  font-size: 1.05rem;
-  margin: 0 0 1.5rem;
-}
 .unlock-modal-price {
   font-family: var(--font-display);
   color: var(--gold-light);
   font-size: clamp(1.85rem, 5.5vw, 2.2rem);
   font-weight: 600;
-  margin: 0 0 1.75rem;
+  margin: 0 0 1.25rem;
   letter-spacing: 0.01em;
 }
 .unlock-modal-cta {
@@ -1210,9 +1203,61 @@ h4 {
     transform: scaleY(2.2);
   }
 }
-.payment-block {
-  margin-top: 3rem;
+/* The single unlock card (Lean CTA system) — primary conversion surface
+   in free state, after the 9 blurred sections. Title + price + text
+   feature-list + one gold-fill button. Bordered card so it reads as a
+   distinct "here's the offer" moment, not just another inline block. */
+.unlock-card {
+  margin: 3rem auto 0;
+  max-width: 420px;
+  padding: 2.25rem 1.75rem;
   text-align: center;
+  border: 1px solid rgba(201, 168, 76, 0.35);
+  border-radius: 4px;
+  background: rgba(10, 14, 26, 0.5);
+}
+.unlock-card-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.5rem, 5vw, 1.9rem);
+  color: var(--gold-light);
+  margin: 0 0 0.5rem;
+  letter-spacing: 0.015em;
+}
+.unlock-card-price {
+  font-family: var(--font-display);
+  color: var(--gold-light);
+  font-size: clamp(1.8rem, 5.5vw, 2.1rem);
+  font-weight: 600;
+  margin: 0 0 1.4rem;
+  letter-spacing: 0.01em;
+}
+/* Shared feature-list — used by BOTH the unlock card (bottom of free
+   page) and the unlock modal, so the value-prop bullets stay identical
+   in both surfaces. */
+.unlock-features {
+  list-style: none;
+  padding: 0;
+  margin: 0 auto 1.6rem;
+  text-align: left;
+  display: table; /* shrink-to-fit so the bullet column is centred as a group */
+}
+.unlock-features li {
+  color: var(--silver);
+  padding: 0.32rem 0 0.32rem 1.6rem;
+  position: relative;
+  line-height: 1.5;
+  font-size: 1rem;
+}
+.unlock-features li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--gold);
+  font-weight: 700;
+}
+.unlock-card-cta {
+  width: 100%;
 }
 
 /* Post-payment polling overlay — shown after Stripe redirects the user
@@ -1346,14 +1391,9 @@ h4 {
   justify-content: center;
   flex-wrap: wrap;
 }
-.post-actions-lock-note {
-  margin: 0;
-  font-family: var(--font-display);
-  font-style: italic;
-  font-size: 0.95rem;
-  color: rgba(201, 168, 76, 0.75);
-  letter-spacing: 0.04em;
-}
+/* Free-state locked action buttons (Baştan Sona Dinle / PDF İndir):
+   disabled + a small inline lock glyph. They light up (enabled, glyph
+   removed isn't necessary — disabled state dims them) once unlocked. */
 .btn-gold-outline.is-locked {
   display: inline-flex;
   align-items: center;
@@ -1391,7 +1431,9 @@ h4 {
   #shooting-star-host,
   .audio-player,
   .post-actions,
-  .payment-block,
+  .unlock-card,
+  .sticky-cta,
+  .feedback-sticky,
   .progress {
     display: none !important;
   }

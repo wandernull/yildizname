@@ -923,63 +923,12 @@ function makeSection({
   return { node: section, dispose: player.dispose };
 }
 
-// Lock glyph used inside disabled action buttons. Inline SVG so it inherits
-// the button's currentColor.
+// Lock glyph used inside the disabled free-state action buttons
+// (Baştan Sona Dinle / PDF İndir). Inline SVG so it inherits the
+// button's currentColor. (The Lean redesign removed the old top/bottom
+// locked-actions blocks + the makeLockedActionsBlock builder; this glyph
+// + the inline locking in renderResult's free branch are what remain.)
 const LOCK_GLYPH_HTML = `<span class="lock-glyph" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6 V4 a3 3 0 0 1 6 0 v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="2" y="6" width="8" height="7" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="9.5" r="0.7" fill="currentColor"/></svg></span>`;
-
-// Apply the locked visual state (disabled buttons + lock glyph + native
-// hover tooltip) to a `.post-actions` element. The lock SVG inside each
-// button is signal enough on its own; the previous "Tam okumayla açılır"
-// caption was felt to be over-explaining.
-function applyLockedActionsState(postActionsEl) {
-  const buttons = postActionsEl.querySelectorAll(
-    ".action-listen-all, .action-print",
-  );
-  for (const btn of buttons) {
-    btn.disabled = true;
-    btn.classList.add("is-locked");
-    if (!btn.querySelector(".lock-glyph")) {
-      btn.insertAdjacentHTML("afterbegin", LOCK_GLYPH_HTML);
-    }
-    btn.title = "Tam okumayla açılır";
-  }
-}
-
-// Build a fresh post-actions DOM node in the locked state. Same structure
-// and styling as the template's bottom post-actions, just constructed
-// programmatically so we can insert one near the top payment block too.
-function makeLockedActionsBlock() {
-  const wrap = document.createElement("div");
-  wrap.className = "post-actions";
-
-  const row = document.createElement("div");
-  row.className = "post-actions-row";
-
-  const listen = document.createElement("button");
-  listen.type = "button";
-  listen.className = "btn-gold-outline action-listen-all";
-  listen.textContent = "Baştan Sona Dinle";
-
-  const printer = document.createElement("button");
-  printer.type = "button";
-  printer.className = "btn-gold-outline action-print";
-  printer.textContent = "PDF İndir";
-
-  // Share button — always enabled, even on the locked preview. Sharing the
-  // free preview to a friend drives organic conversion; the recipient sees
-  // the same karakterinOzu and the same unlock CTA.
-  const share = document.createElement("button");
-  share.type = "button";
-  share.className = "btn-gold-outline action-share";
-  share.textContent = "Paylaş";
-
-  row.append(listen, printer, share);
-  wrap.append(row);
-  // applyLockedActionsState only targets .action-listen-all + .action-print,
-  // so .action-share is left active.
-  applyLockedActionsState(wrap);
-  return wrap;
-}
 
 // In-app browsers (Instagram, Facebook, TikTok, X, etc.) ship
 // navigator.share but implement it badly. Instagram's iOS in-app
@@ -1058,8 +1007,9 @@ const PRICE_LABEL = "349,99 ₺";
 // label makes the two-step flow feel like one continuous action.
 const PAYMENT_CTA_LABEL = "Kaderinin tamamını aç →";
 
-// Shared unlock flow. Used by makePaymentBlock (inline gold-fill buttons)
-// AND the sticky-CTA reveal modal. Calls /api/unlock which now returns a
+// Shared unlock flow. Reached via the reveal modal's CTA, which every
+// unlock entry point (unlock card, sticky, inline "Devamını oku") opens.
+// Calls /api/unlock which now returns a
 // Stripe Checkout URL; the browser is redirected there. On Stripe success,
 // the redirect lands back on /okuma/:id?paid=1&session=... where
 // renderResult's post-payment polling handles the wait for the webhook.
@@ -1099,11 +1049,11 @@ async function performUnlock(id, router, btn, errEl, restoreLabel) {
 }
 
 // Wires the sticky-bottom-CTA and reveal-modal that live in the result
-// template. Only called when !isUnlocked. Manages visibility via two
-// IntersectionObservers (sticky shows when karakterinOzu leaves viewport
-// top, hides when the bottom payment block enters viewport) and routes
-// modal-CTA clicks through the same performUnlock helper as the inline
-// payment buttons.
+// template. Only called when !isUnlocked. The sticky fades in shortly
+// after mount and hides when the unlock card scrolls into view (the card
+// has its own button, so the sticky would be redundant there). All
+// unlock entry points — sticky, unlock card, inline "Devamını oku" —
+// open the same modal, whose CTA routes through performUnlock.
 function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   const sticky = root.querySelector(".sticky-cta");
   const stickyTrigger = root.querySelector(".sticky-cta-trigger");
@@ -1115,12 +1065,11 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
 
   // Visibility logic: sticky fades in 1.5s after the view mounts (just
   // enough delay so the autoplay starts cleanly without the sticky
-  // sliding in over it), then stays visible until the bottom inline
-  // payment block scrolls into the viewport. The previous version waited
-  // for karakterinOzu to scroll out — too late, by then the user had
-  // already finished the free section without seeing the unlock signal.
-  const paymentBlocks = sectionsHost.querySelectorAll(".payment-block");
-  const bottomPayment = paymentBlocks[paymentBlocks.length - 1] ?? null;
+  // sliding in over it), then stays visible until the unlock card scrolls
+  // into the viewport (the card carries its own button, so the sticky is
+  // redundant there).
+  const unlockCards = sectionsHost.querySelectorAll(".unlock-card");
+  const bottomCard = unlockCards[unlockCards.length - 1] ?? null;
 
   let mountedShown = false;
   let bottomVisible = false;
@@ -1140,7 +1089,7 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
     },
     { rootMargin: "0px 0px -80px 0px" },
   );
-  if (bottomPayment) bottomObs.observe(bottomPayment);
+  if (bottomCard) bottomObs.observe(bottomCard);
 
   disposables.push(() => {
     window.clearTimeout(showDelay);
@@ -1169,7 +1118,7 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   // which CTA the user taps.
   stickyTrigger.addEventListener("click", openModal);
   for (const btn of root.querySelectorAll(
-    ".payment-block .btn-gold-fill, .devamini-oku-inline",
+    ".unlock-card .btn-gold-fill, .devamini-oku-inline",
   )) {
     btn.addEventListener("click", openModal);
     // Inline link uses role="button" + Enter/Space keyboard activation
@@ -1333,18 +1282,26 @@ function wireFeedback({ root, id, disposables }) {
   });
 }
 
-function makePaymentBlock() {
-  const wrap = document.createElement("div");
-  wrap.className = "payment-block";
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "btn-gold-fill";
-  btn.textContent = PAYMENT_CTA_LABEL;
-  wrap.append(btn);
-  // No click handler here — wireStickyAndModal attaches one that opens
-  // the reveal modal. The modal's own CTA is what eventually calls
-  // performUnlock. Single source of truth for the unlock action.
-  return wrap;
+// The single unlock card (Lean CTA system). Replaces the old top+bottom
+// payment blocks and the disabled locked-actions blocks. Title + price +
+// text feature-list (what you unlock) + one primary gold-fill button.
+// No click handler here — wireStickyAndModal attaches one (via the
+// `.unlock-card .btn-gold-fill` selector) that opens the reveal modal;
+// the modal's CTA is the single thing that calls performUnlock.
+function makeUnlockCard() {
+  const card = document.createElement("div");
+  card.className = "unlock-card";
+  card.innerHTML = `
+    <h3 class="unlock-card-title">Kaderinin tamamını aç</h3>
+    <p class="unlock-card-price">349,99 ₺</p>
+    <ul class="unlock-features">
+      <li>Dokuz bölüm daha</li>
+      <li>Müneccim sesiyle baştan sona sesli okuma</li>
+      <li>PDF olarak indir</li>
+    </ul>
+    <button type="button" class="btn-gold-fill unlock-card-cta">${PAYMENT_CTA_LABEL}</button>
+  `;
+  return card;
 }
 
 // On Stripe redirect (?paid=1), the webhook may not have flipped the row
@@ -1607,17 +1564,11 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
       orn.setAttribute("aria-hidden", "true");
       sectionsHost.appendChild(orn);
 
-      // Top payment block — same component used at the bottom. Sits right
-      // before the locked sections so the user sees the unlock CTA the
-      // moment they finish reading karakterinOzu, without scrolling past
-      // 9 blurred placeholders to find it. Followed by an identical
-      // locked-actions block (disabled "Baştan Sona Dinle" + "PDF İndir"
-      // with "Tam okumayla açılır" hint) so the top placement mirrors the
-      // bottom exactly.
-      if (!isUnlocked) {
-        sectionsHost.appendChild(makePaymentBlock());
-        sectionsHost.appendChild(makeLockedActionsBlock());
-      }
+      // Lean CTA system: no top payment block, no top locked-actions
+      // block. The inline "Devamını oku →" hook inside karakterinOzu
+      // already catches the just-finished-reading moment; the single
+      // unlock card at the bottom (after the 9 blurred sections) is the
+      // primary conversion surface. One primary CTA per context.
 
       for (const key of LOCKED_SECTION_KEYS) {
         const text = data[key];
@@ -1640,22 +1591,35 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         }
       }
 
+      // The single unlock card — primary conversion surface in free
+      // state. Sits after the 9 blurred sections (the bottom of the
+      // scroll). Title + price + feature-list + one gold-fill button.
       if (!isUnlocked) {
-        sectionsHost.appendChild(makePaymentBlock());
+        sectionsHost.appendChild(makeUnlockCard());
       }
 
-      // The post-action buttons are visible at the bottom of the result
-      // page even before unlock — disabled with a lock glyph inside each.
-      // After unlock they light up and become functional. The same
-      // locked-state block (built fresh by makeLockedActionsBlock above)
-      // is also inserted at the top of the locked area so both placements
-      // mirror exactly.
       const listenBtn = postActions.querySelector(".action-listen-all");
       const printBtn = postActions.querySelector(".action-print");
 
       if (!isUnlocked) {
-        applyLockedActionsState(postActions);
+        // Free state: lock the audio + PDF buttons — disabled + lock glyph
+        // + tooltip. They light up on unlock (paid branch below). Interim
+        // approach (clearest signal that they're paid features) until we
+        // revisit this component. Paylaş stays live (sharing the free
+        // preview is a viral-growth lever).
+        for (const btn of [listenBtn, printBtn]) {
+          btn.disabled = true;
+          btn.classList.add("is-locked");
+          if (!btn.querySelector(".lock-glyph")) {
+            btn.insertAdjacentHTML("afterbegin", LOCK_GLYPH_HTML);
+          }
+          btn.title = "Tam okumayla açılır";
+        }
       } else {
+        // Paid: "Baştan Sona Dinle" is the primary paid action → promote
+        // it to gold-fill. PDF İndir + Paylaş stay secondary (outline).
+        listenBtn.classList.remove("btn-gold-outline");
+        listenBtn.classList.add("btn-gold-fill");
 
         // Sequential playback through all 11 sections using the single
         // chainAudio element. Cache hits make this near-seamless; cache
