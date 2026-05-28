@@ -351,7 +351,15 @@ interface PromoRow {
   expires_at: string | null;
   max_redemptions: number | null;
   created_at: string;
+  sent_at: string | null;
+  sent_to: string | null;
 }
+
+// Column list shared by the promo SELECTs (keeps getPromo +
+// listPromosForReading in sync).
+const PROMO_COLUMNS =
+  `id, reading_id, code, stripe_coupon_id, stripe_promotion_code_id,
+   percent_off, expires_at, max_redemptions, created_at, sent_at, sent_to`;
 
 function rowToPromo(row: PromoRow): Promo {
   return {
@@ -364,6 +372,8 @@ function rowToPromo(row: PromoRow): Promo {
     expiresAt: row.expires_at,
     maxRedemptions: row.max_redemptions,
     createdAt: row.created_at,
+    sentAt: row.sent_at,
+    sentTo: row.sent_to,
   };
 }
 
@@ -410,8 +420,7 @@ export async function listPromosForReading(
 ): Promise<Promo[]> {
   const result = await db
     .prepare(
-      `SELECT id, reading_id, code, stripe_coupon_id, stripe_promotion_code_id,
-              percent_off, expires_at, max_redemptions, created_at
+      `SELECT ${PROMO_COLUMNS}
          FROM promos
         WHERE reading_id = ?
         ORDER BY created_at DESC`,
@@ -419,6 +428,32 @@ export async function listPromosForReading(
     .bind(readingId)
     .all<PromoRow>();
   return (result.results ?? []).map(rowToPromo);
+}
+
+// A single promo by id (Ops page "Gönder" handler needs the code + reading
+// id to compose + redirect). Null if not found.
+export async function getPromo(
+  db: D1Database,
+  id: string,
+): Promise<Promo | null> {
+  const row = await db
+    .prepare(`SELECT ${PROMO_COLUMNS} FROM promos WHERE id = ?`)
+    .bind(id)
+    .first<PromoRow>();
+  return row ? rowToPromo(row) : null;
+}
+
+// Mark a promo as emailed (records the send time + recipient). Called after
+// a successful Resend send from the Ops compose modal.
+export async function markPromoSent(
+  db: D1Database,
+  id: string,
+  to: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE promos SET sent_at = datetime('now'), sent_to = ? WHERE id = ?`)
+    .bind(to, id)
+    .run();
 }
 
 // Admin op (the /admin Ops page): roll a reading back to its free,

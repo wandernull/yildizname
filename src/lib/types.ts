@@ -125,6 +125,10 @@ export interface Promo {
   expiresAt: string | null;
   maxRedemptions: number | null;
   createdAt: string;
+  // When/where the code was emailed to the customer via the Ops page
+  // (migration 0009). Null until sent. sentTo is the recipient address.
+  sentAt: string | null;
+  sentTo: string | null;
 }
 
 // Worker bindings, declared via wrangler.toml. The wrangler types generator
@@ -146,4 +150,9 @@ export interface Env {
   // ADMIN_PASS`. Locally, put them in .dev.vars.
   ADMIN_USER: string;
   ADMIN_PASS: string;
+  // Resend API key for outbound email sent AS destek@yildizna.me (promo /
+  // win-back codes from the admin Ops page). Set via `npx wrangler secret
+  // put RESEND_API_KEY`; locally in .dev.vars. Inbound destek@/support@
+  // still route through Cloudflare Email Routing to the real inbox.
+  RESEND_API_KEY: string;
 }

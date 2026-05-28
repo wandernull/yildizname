@@ -4,6 +4,7 @@ import {
   captureClientKind,
   captureViewerIp,
   countPaidReadings,
+  getPromo,
   getReading,
   insertReading,
   insertPromo,
@@ -11,6 +12,7 @@ import {
   listReadingsForAdmin,
   listReadingsWithFeedback,
   markEvent,
+  markPromoSent,
   markReadingPaid,
   resetPaymentForAdmin,
   setCustomerEmail,
@@ -26,6 +28,11 @@ import {
   fetchSessionEmail,
   verifyStripeSignature,
 } from "./lib/stripe";
+import {
+  buildPromoEmailDefaults,
+  plainTextToHtml,
+  sendEmail,
+} from "./lib/email";
 import { getKarakterinOzuTeaser, splitKarakterinOzu } from "./lib/text";
 import {
   fetchCachedAudio,
@@ -780,10 +787,22 @@ function renderAdminShell(
     .promo-meta { color: var(--dim); }
     .promo-used { color: #4ade80; font-weight: 600; margin-left: auto; }
     .promo-unused { color: var(--dim); margin-left: auto; }
+    .promo-sent { color: #7aa5d8; font-size: 0.8rem; }
+    .promo-send-btn { background: transparent; color: var(--gold); border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.7rem; font-size: 0.8rem; cursor: pointer; }
+    .promo-send-btn:hover { border-color: var(--gold); }
     .promo-form { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
     .promo-form label { color: var(--dim); display: flex; align-items: center; gap: 0.3rem; }
     .promo-form input { width: 64px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--fg); padding: 0.4rem 0.5rem; font-size: 0.9rem; }
     .promo-form-note { color: var(--dim); font-size: 0.8rem; }
+    .ops-btn-ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); border-radius: 4px; padding: 0.55rem 1.1rem; font-size: 0.9rem; cursor: pointer; }
+    .ops-dialog { width: min(560px, 92vw); background: var(--row2); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; padding: 1.4rem 1.5rem; }
+    .ops-dialog::backdrop { background: rgba(8,8,20,0.66); }
+    .ops-dialog h3 { margin: 0 0 1rem; font-size: 1rem; color: var(--gold); font-weight: 600; }
+    .ops-dialog h3 code { font-family: ui-monospace, monospace; background: rgba(201,168,76,0.14); padding: 2px 7px; border-radius: 4px; }
+    .ops-dialog label { display: block; color: var(--dim); font-size: 0.82rem; margin-bottom: 0.9rem; }
+    .ops-dialog input, .ops-dialog textarea { display: block; width: 100%; margin-top: 0.3rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
+    .ops-dialog textarea { resize: vertical; line-height: 1.5; }
+    .ops-dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.4rem; }
   </style>
 </head>
 <body>
@@ -946,11 +965,21 @@ function renderOpsBody(
     resetDone: boolean;
     emailSynced: string | null;
     promoResult: string | null;
+    promoSent: string | null;
+    emailTest: string | null;
     promos: Array<{ promo: Promo; timesRedeemed: number | null }>;
   },
 ): string {
-  const { lookupId, notFound, resetDone, emailSynced, promoResult, promos } =
-    opts;
+  const {
+    lookupId,
+    notFound,
+    resetDone,
+    emailSynced,
+    promoResult,
+    promoSent,
+    emailTest,
+    promos,
+  } = opts;
 
   let notice = "";
   if (resetDone) {
@@ -963,6 +992,14 @@ function renderOpsBody(
     notice = `<div class="ops-note ok">✓ Promosyon oluşturuldu.</div>`;
   } else if (promoResult === "0") {
     notice = `<div class="ops-note warn">Promosyon oluşturulamadı — Stripe hatası.</div>`;
+  } else if (promoSent === "1") {
+    notice = `<div class="ops-note ok">✓ Promosyon e-postası gönderildi.</div>`;
+  } else if (promoSent === "0") {
+    notice = `<div class="ops-note warn">Promosyon e-postası gönderilemedi — Resend hatası (loglara bak).</div>`;
+  } else if (emailTest === "1") {
+    notice = `<div class="ops-note ok">✓ Test e-postası gönderildi — gelen kutunu (ve spam'i) kontrol et.</div>`;
+  } else if (emailTest === "0") {
+    notice = `<div class="ops-note warn">Test e-postası gönderilemedi — Resend hatası (loglara bak).</div>`;
   } else if (notFound) {
     notice = `<div class="ops-note warn">Bu id ile okuma bulunamadı.</div>`;
   }
@@ -1020,11 +1057,40 @@ function renderOpsBody(
                   : timesRedeemed > 0
                     ? `<span class="promo-used">Kullanıldı (${timesRedeemed})</span>`
                     : `<span class="promo-unused">Kullanılmadı</span>`;
+              const sent = promo.sentAt
+                ? `<span class="promo-sent" title="${esc(promo.sentTo ?? "")}">✉ ${esc(promo.sentAt.slice(0, 10))}</span>`
+                : "";
+              // Pre-fill the compose modal: greeting personalised from the
+              // reading owner's name, recipient from the captured customer
+              // email (editable if missing). The operator edits before send.
+              const defaults = buildPromoEmailDefaults({
+                name: f.name,
+                code: promo.code,
+                percentOff: promo.percentOff,
+                expiresLabel: exp,
+              });
+              // promo.id is a UUID (no quotes) so it's safe to interpolate
+              // into the element id + inline onclick, like the reset confirm.
+              const dialog = `<dialog id="send-${promo.id}" class="ops-dialog">
+        <form method="post" action="/api/admin/send-promo/${promo.id}">
+          <h3>Promosyon gönder · <code>${esc(promo.code)}</code></h3>
+          <label>Alıcı<input name="to" type="email" value="${esc(reading.customerEmail ?? "")}" placeholder="alıcı e-posta" required /></label>
+          <label>Konu<input name="subject" value="${esc(defaults.subject)}" required /></label>
+          <label>Mesaj<textarea name="body" rows="12" required>${esc(defaults.bodyText)}</textarea></label>
+          <div class="ops-dialog-actions">
+            <button type="button" class="ops-btn-ghost" onclick="this.closest('dialog').close()">Vazgeç</button>
+            <button type="submit" class="ops-btn">Gönder →</button>
+          </div>
+        </form>
+      </dialog>`;
               return `<div class="promo-row">
         <code class="promo-code">${esc(promo.code)}</code>
         <span class="promo-meta">%${promo.percentOff ?? "—"} · ${esc(exp)} · ${created}</span>
         ${used}
-      </div>`;
+        ${sent}
+        <button type="button" class="promo-send-btn" onclick="document.getElementById('send-${promo.id}').showModal()">${promo.sentAt ? "Tekrar gönder" : "Gönder →"}</button>
+      </div>
+      ${dialog}`;
             })
             .join("\n");
 
@@ -1054,9 +1120,26 @@ function renderOpsBody(
     }
   }
 
+  // Standalone email-channel verifier (not tied to a reading). Sends a
+  // test message AS destek@yildizna.me via Resend so we can confirm
+  // deliverability (DKIM/SPF/DMARC pass, lands in inbox not spam) before
+  // building email features on top. Carries the loaded reading id through
+  // a hidden field so the redirect keeps the current reading in view.
+  const testEmailCard = `
+  <div class="ops-card">
+    <h2>E-posta testi</h2>
+    <p class="ops-empty">destek@yildizna.me adresinden test e-postası gönder (Resend kanalını doğrula). Spam'e düşüp düşmediğini görmek için harici bir adrese de (Gmail vb.) dene.</p>
+    <form method="post" action="/api/admin/test-email" class="ops-form">
+      <input name="to" type="email" placeholder="alıcı e-posta" autocomplete="off" required />
+      <input type="hidden" name="id" value="${esc(lookupId)}" />
+      <button class="ops-btn" type="submit">Test gönder →</button>
+    </form>
+  </div>`;
+
   return `  <p class="meta">Bir okumanın id'sini gir, durumunu gör, gerekiyorsa ödemesini geri al.</p>
   ${notice}
   ${form}
+  ${testEmailCard}
   ${detail}`;
 }
 
@@ -1084,6 +1167,8 @@ app.get("/admin/ops", async (c) => {
   const resetDone = c.req.query("reset") === "1";
   const emailSynced = c.req.query("email") ?? null;
   const promoResult = c.req.query("promo") ?? null;
+  const promoSent = c.req.query("promo_sent") ?? null;
+  const emailTest = c.req.query("email_test") ?? null;
   let reading: Reading | null = null;
   let notFound = false;
   let promos: Array<{ promo: Promo; timesRedeemed: number | null }> = [];
@@ -1115,6 +1200,8 @@ app.get("/admin/ops", async (c) => {
         resetDone,
         emailSynced,
         promoResult,
+        promoSent,
+        emailTest,
         promos,
       }),
     ),
@@ -1197,6 +1284,97 @@ app.post("/api/admin/generate-promo/:id", async (c) => {
   } catch (err) {
     console.error("[admin] promo generation failed", { id, err });
     return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}&promo=0`, 303);
+  }
+});
+
+// Send a test email AS destek@yildizna.me (admin Ops). Verifies the Resend
+// channel + DKIM/SPF/DMARC end-to-end before email features are built on
+// top. Standalone (not tied to a reading), but carries an optional `id`
+// through so the PRG redirect keeps the current reading in view.
+app.post("/api/admin/test-email", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const body = await c.req
+    .parseBody()
+    .catch(() => ({}) as Record<string, unknown>);
+  const to = String((body as { to?: unknown }).to ?? "").trim();
+  const id = String((body as { id?: unknown }).id ?? "").trim();
+  const back = (ok: "1" | "0") =>
+    c.redirect(
+      id
+        ? `/admin/ops?id=${encodeURIComponent(id)}&email_test=${ok}`
+        : `/admin/ops?email_test=${ok}`,
+      303,
+    );
+
+  if (!to.includes("@")) return back("0");
+
+  const html = `<div style="font-family:Georgia,serif;color:#1a1a2e;line-height:1.6">
+    <p>Bu, <strong>destek@yildizna.me</strong> adresinden gönderilen bir test e-postasıdır.</p>
+    <p>Bu mesajı gelen kutunda (spam değil) görüyorsan, Resend kanalı ve alan adı doğrulaması çalışıyor demektir.</p>
+    <p style="color:#6b6b8a">— Yıldızname</p>
+  </div>`;
+  const text =
+    "Bu, destek@yildizna.me adresinden gönderilen bir test e-postasıdır. " +
+    "Bu mesajı gelen kutunda (spam değil) görüyorsan, Resend kanalı ve " +
+    "alan adı doğrulaması çalışıyor demektir. — Yıldızname";
+
+  try {
+    const res = await sendEmail(c.env, {
+      to,
+      subject: "Yıldızname — e-posta testi",
+      html,
+      text,
+    });
+    console.log("[admin] test email sent", { to, resendId: res.id });
+    return back("1");
+  } catch (err) {
+    console.error("[admin] test email failed", { to, err });
+    return back("0");
+  }
+});
+
+// Email a generated promo to a customer (admin Ops compose modal). Reads
+// the operator-edited recipient/subject/body, sends via Resend AS
+// destek@yildizna.me, records the send (sent_at/sent_to), PRG back to the
+// reading. Re-sending is allowed (button reads "Tekrar gönder").
+app.post("/api/admin/send-promo/:promoId", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const promoId = c.req.param("promoId");
+  const promo = await getPromo(c.env.DB, promoId);
+  if (!promo) return c.redirect(`/admin/ops?promo_sent=0`, 303);
+
+  const back = (ok: "1" | "0") =>
+    c.redirect(
+      `/admin/ops?id=${encodeURIComponent(promo.readingId)}&promo_sent=${ok}`,
+      303,
+    );
+
+  const body = await c.req
+    .parseBody()
+    .catch(() => ({}) as Record<string, unknown>);
+  const to = String((body as { to?: unknown }).to ?? "").trim();
+  const subject = String((body as { subject?: unknown }).subject ?? "").trim();
+  const bodyText = String((body as { body?: unknown }).body ?? "").trim();
+  if (!to.includes("@") || !subject || !bodyText) return back("0");
+
+  try {
+    const res = await sendEmail(c.env, {
+      to,
+      subject,
+      html: plainTextToHtml(bodyText),
+      text: bodyText,
+    });
+    await markPromoSent(c.env.DB, promoId, to);
+    console.log("[admin] promo emailed", {
+      promoId,
+      to,
+      code: promo.code,
+      resendId: res.id,
+    });
+    return back("1");
+  } catch (err) {
+    console.error("[admin] promo email failed", { promoId, to, err });
+    return back("0");
   }
 });
 

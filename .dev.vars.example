@@ -17,3 +17,11 @@ STRIPE_WEBHOOK_SECRET="whsec_..."
 # `npx wrangler secret put ADMIN_USER` and `npx wrangler secret put ADMIN_PASS`.
 ADMIN_USER="admin"
 ADMIN_PASS="change-me-locally"
+
+# Resend API key for outbound email sent AS destek@yildizna.me (e.g. promo
+# / win-back codes from the admin Ops page). The yildizna.me domain is
+# verified in Resend (DKIM on the root); inbound destek@/support@ still
+# route through Cloudflare Email Routing. Resend keys are not test/prod-
+# scoped, so the same key works locally and in prod. Production:
+#   npx wrangler secret put RESEND_API_KEY
+RESEND_API_KEY="re_..."
