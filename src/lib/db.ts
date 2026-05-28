@@ -320,3 +320,36 @@ export async function markReadingPaid(
     .run();
   return getReading(db, id);
 }
+
+// Admin op (the /admin Ops page): roll a reading back to its free,
+// pre-payment state. Clears unlocked + all Stripe metadata + any feedback
+// (an unpaid reading shouldn't carry feedback). Mirrors the
+// scripts/reset-paid-one.sh SQL. Does NOT issue a Stripe refund — that's
+// a separate Dashboard action. Returns the updated reading, or null if
+// the reading doesn't exist.
+export async function resetPaymentForAdmin(
+  db: D1Database,
+  id: string,
+): Promise<Reading | null> {
+  const existing = await getReading(db, id);
+  if (!existing) return null;
+  await db
+    .prepare(
+      `UPDATE readings
+          SET unlocked = 0,
+              stripe_session_id = NULL,
+              stripe_payment_intent_id = NULL,
+              paid_at = NULL,
+              invoice_hosted_url = NULL,
+              invoice_pdf_url = NULL,
+              feedback_rating = NULL,
+              feedback_text = NULL,
+              feedback_at = NULL,
+              viewed_feedback_cta = 0,
+              clicked_feedback_cta = 0
+        WHERE id = ?`,
+    )
+    .bind(id)
+    .run();
+  return getReading(db, id);
+}

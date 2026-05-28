@@ -10,6 +10,7 @@ import {
   listReadingsWithFeedback,
   markEvent,
   markReadingPaid,
+  resetPaymentForAdmin,
   submitFeedback,
 } from "./lib/db";
 import { generateYildizname } from "./lib/llm";
@@ -667,7 +668,7 @@ function renderComment(text: string | null): string {
 // current page. Both admin pages render their body through this so the
 // styling + nav stay in lockstep.
 function renderAdminShell(
-  activeTab: "funnel" | "ratings",
+  activeTab: "funnel" | "ratings" | "ops",
   bodyHtml: string,
 ): string {
   const tab = (href: string, label: string, key: string) =>
@@ -726,6 +727,25 @@ function renderAdminShell(
     td.comment-cell { max-width: 360px; }
     .comment { color: var(--fg); }
     .empty { padding: 3rem 0; text-align: center; color: var(--dim); font-style: italic; }
+    td.id a.ops-link { color: var(--dim); }
+    td.id a.ops-link:hover { color: var(--gold); }
+    /* Ops page */
+    .ops-form { display: flex; gap: 0.5rem; margin-bottom: 1.6rem; max-width: 560px; }
+    .ops-form input { flex: 1; background: var(--row2); border: 1px solid var(--border); border-radius: 4px; color: var(--fg); padding: 0.55rem 0.75rem; font-size: 0.9rem; font-family: ui-monospace, monospace; }
+    .ops-form input:focus { outline: none; border-color: var(--gold); }
+    .ops-btn { background: var(--gold); color: var(--bg); border: none; border-radius: 4px; padding: 0.55rem 1.1rem; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+    .ops-card { max-width: 560px; background: var(--row2); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.4rem; margin-bottom: 1.4rem; }
+    .ops-card h2 { margin: 0 0 0.9rem; font-size: 1rem; color: var(--gold); font-weight: 600; }
+    .ops-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.35rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.88rem; }
+    .ops-row:last-child { border-bottom: none; }
+    .ops-row .k { color: var(--dim); }
+    .ops-row .v { color: var(--fg); text-align: right; word-break: break-all; }
+    .ops-danger { background: rgba(217,122,122,0.12); border: 1px solid rgba(217,122,122,0.4); border-radius: 8px; padding: 1.25rem 1.4rem; max-width: 560px; }
+    .ops-danger p { margin: 0 0 1rem; color: #e0a3a3; font-size: 0.9rem; }
+    .ops-danger-btn { background: #b9534f; color: #fff; border: none; border-radius: 4px; padding: 0.6rem 1.2rem; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+    .ops-note { max-width: 560px; padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 1.4rem; font-size: 0.9rem; }
+    .ops-note.ok { background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.4); color: #7be3a0; }
+    .ops-note.warn { background: rgba(201,168,76,0.12); border: 1px solid rgba(201,168,76,0.35); color: var(--gold); }
   </style>
 </head>
 <body>
@@ -733,6 +753,7 @@ function renderAdminShell(
   <nav class="admin-nav">
     ${tab("/admin", "Funnel", "funnel")}
     ${tab("/admin/ratings", "Puanlar", "ratings")}
+    ${tab("/admin/ops", "İşlemler", "ops")}
   </nav>
 ${bodyHtml}
 </body>
@@ -764,7 +785,13 @@ function renderFunnelBody(readings: Reading[]): string {
   <td class="flag">${r.listenedChain ? CHECK : DASH}</td>
   <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
   <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
-  <td class="id"><a href="/okuma/${esc(r.id)}" target="_blank">aç →</a></td>
+  <td class="id">
+    <a href="/okuma/${esc(r.id)}" target="_blank">aç →</a>${
+      r.unlocked
+        ? `<br /><a class="ops-link" href="/admin/ops?id=${esc(r.id)}">işlem →</a>`
+        : ""
+    }
+  </td>
 </tr>`;
     })
     .join("\n");
@@ -865,6 +892,65 @@ ${rows}
   </table>`}`;
 }
 
+// Ops page body — destructive admin actions (currently: reset a payment).
+// `reading` is the looked-up reading (?id=…), or null if none/not found.
+function renderOpsBody(
+  reading: Reading | null,
+  opts: { lookupId: string; notFound: boolean; resetDone: boolean },
+): string {
+  const { lookupId, notFound, resetDone } = opts;
+
+  let notice = "";
+  if (resetDone) {
+    notice = `<div class="ops-note ok">✓ Ödeme geri alındı — okuma artık ücretsiz (kilitli) durumda.</div>`;
+  } else if (notFound) {
+    notice = `<div class="ops-note warn">Bu id ile okuma bulunamadı.</div>`;
+  }
+
+  const form = `
+  <form class="ops-form" method="get" action="/admin/ops">
+    <input name="id" placeholder="okuma id" value="${esc(lookupId)}" autocomplete="off" />
+    <button class="ops-btn" type="submit">Yükle</button>
+  </form>`;
+
+  let detail = "";
+  if (reading) {
+    const f = reading.formData;
+    const created = reading.createdAt.replace("T", " ").slice(0, 19);
+    const paidAt = reading.paidAt
+      ? reading.paidAt.replace("T", " ").slice(0, 19)
+      : "—";
+    detail = `
+  <div class="ops-card">
+    <h2>${esc(f.name)} <span class="dim" style="color:var(--dim);font-weight:400">· ${esc(reading.id)}</span></h2>
+    <div class="ops-row"><span class="k">Oluşturuldu</span><span class="v">${esc(created)}</span></div>
+    <div class="ops-row"><span class="k">Durum</span><span class="v">${reading.unlocked ? "Ödendi (açık)" : "Ücretsiz (kilitli)"}</span></div>
+    <div class="ops-row"><span class="k">Ödeme zamanı</span><span class="v">${esc(paidAt)}</span></div>
+    <div class="ops-row"><span class="k">Stripe session</span><span class="v">${esc(reading.stripeSessionId ?? "—")}</span></div>
+    <div class="ops-row"><span class="k">Puan</span><span class="v">${reading.feedbackRating ?? "—"}</span></div>
+  </div>`;
+
+    if (reading.unlocked) {
+      // The confirm() interpolates only the id (a UUID — no quotes), never
+      // the user-supplied name, to avoid breaking the inline JS string.
+      detail += `
+  <div class="ops-danger">
+    <p>Bu okumanın ödemesini geri al: <strong>unlocked = 0</strong> + tüm Stripe verisi + geri bildirim temizlenir. Geri alınamaz. (Stripe iadesini ayrıca Dashboard'dan yapman gerekir.)</p>
+    <form method="post" action="/api/admin/reset-payment/${esc(reading.id)}" onsubmit="return confirm('Ödemeyi geri al: ${esc(reading.id)} — emin misin?');">
+      <button class="ops-danger-btn" type="submit">Ödemeyi geri al →</button>
+    </form>
+  </div>`;
+    } else {
+      detail += `<div class="ops-note warn">Bu okuma zaten ücretsiz (kilitli) — geri alınacak ödeme yok.</div>`;
+    }
+  }
+
+  return `  <p class="meta">Bir okumanın id'sini gir, durumunu gör, gerekiyorsa ödemesini geri al.</p>
+  ${notice}
+  ${form}
+  ${detail}`;
+}
+
 app.get("/admin", async (c) => {
   if (!checkBasicAuth(c, c.env)) return unauthorized();
   const readings = await listReadingsForAdmin(c.env.DB);
@@ -880,6 +966,36 @@ app.get("/admin/ratings", async (c) => {
   return c.html(
     renderAdminShell("ratings", renderRatingsBody(feedbackReadings, paidCount)),
   );
+});
+
+// Ops page: look up a reading by id and (if paid) reset its payment.
+app.get("/admin/ops", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const lookupId = c.req.query("id") ?? "";
+  const resetDone = c.req.query("reset") === "1";
+  let reading: Reading | null = null;
+  let notFound = false;
+  if (lookupId) {
+    reading = await getReading(c.env.DB, lookupId);
+    notFound = reading === null;
+  }
+  return c.html(
+    renderAdminShell(
+      "ops",
+      renderOpsBody(reading, { lookupId, notFound, resetDone }),
+    ),
+  );
+});
+
+// Reset a reading's payment (admin-only). Form-POSTed from the Ops page.
+// Basic-auth protected like the rest of /admin. PRG: redirect back to the
+// Ops page so a refresh doesn't re-submit. Does NOT refund on Stripe.
+app.post("/api/admin/reset-payment/:id", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const id = c.req.param("id");
+  await resetPaymentForAdmin(c.env.DB, id);
+  console.log("[admin] payment reset", { id });
+  return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}&reset=1`, 303);
 });
 
 // ----- SPA fallback ---------------------------------------------------------
