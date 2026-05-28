@@ -11,6 +11,7 @@ import {
   markEvent,
   markReadingPaid,
   resetPaymentForAdmin,
+  setCustomerEmail,
   submitFeedback,
 } from "./lib/db";
 import { generateYildizname } from "./lib/llm";
@@ -18,6 +19,7 @@ import {
   createCheckoutSession,
   createStripeCustomer,
   fetchInvoiceMetadata,
+  fetchSessionEmail,
   verifyStripeSignature,
 } from "./lib/stripe";
 import { getKarakterinOzuTeaser, splitKarakterinOzu } from "./lib/text";
@@ -396,6 +398,8 @@ app.post("/api/stripe/webhook", async (c) => {
         client_reference_id?: string;
         payment_intent?: string | null;
         invoice?: string | null;
+        customer_details?: { email?: string | null } | null;
+        customer_email?: string | null;
       }
     | undefined;
 
@@ -426,11 +430,18 @@ app.post("/api/stripe/webhook", async (c) => {
     }
   }
 
+  // Email is right on the session in the webhook payload — capture it now
+  // so new payments get it for free (no extra API call). The admin "Sync
+  // email" op is only for backfilling older readings.
+  const customerEmail =
+    session?.customer_details?.email ?? session?.customer_email ?? null;
+
   const updated = await markReadingPaid(c.env.DB, readingId, {
     sessionId: session?.id ?? "",
     paymentIntentId: session?.payment_intent ?? null,
     invoiceHostedUrl: invoiceMeta.hostedUrl,
     invoicePdfUrl: invoiceMeta.pdfUrl,
+    customerEmail,
   });
 
   if (!updated) {
@@ -653,15 +664,22 @@ function renderBirthCell(r: Reading): string {
 }
 function renderStars(rating: number | null): string {
   if (rating == null) return `<span class="dim">—</span>`;
+  // Colour by sentiment: 4-5 green, 3 amber, 1-2 red.
+  const tone = rating >= 4 ? "r-high" : rating === 3 ? "r-mid" : "r-low";
   const full = "★".repeat(rating);
   const empty = "☆".repeat(Math.max(0, 5 - rating));
-  return `<span class="stars">${full}<span class="stars-empty">${empty}</span></span>`;
+  return `<span class="stars ${tone}">${full}<span class="stars-empty">${empty}</span></span>`;
 }
 function renderComment(text: string | null): string {
   if (!text) return `<span class="dim">—</span>`;
   const truncated = text.length > 70 ? text.slice(0, 70) + "…" : text;
   // title attr gives the full text on hover.
   return `<span class="comment" title="${esc(text)}">${esc(truncated)}</span>`;
+}
+function renderEmailCell(r: Reading): string {
+  return `<td class="email-cell">${
+    r.customerEmail ? esc(r.customerEmail) : `<span class="dim">—</span>`
+  }</td>`;
 }
 
 // Shared HTML scaffold: head + CSS + tab nav. activeTab highlights the
@@ -722,10 +740,15 @@ function renderAdminShell(
     .kind.dim    { background: transparent; color: var(--dim); }
     td.id a { color: var(--gold); text-decoration: none; font-size: 0.78rem; }
     td.id a:hover { text-decoration: underline; }
-    .stars { color: var(--gold); letter-spacing: 1px; white-space: nowrap; font-size: 0.95rem; }
-    .stars-empty { color: rgba(201,168,76,0.3); }
+    .stars { letter-spacing: 1px; white-space: nowrap; font-size: 0.95rem; color: var(--gold); }
+    .stars-empty { color: rgba(255,255,255,0.18); }
+    /* Rating sentiment tones — shared by the Puanlar stars + the avg stat. */
+    .r-high { color: #4ade80; }
+    .r-mid  { color: #e0b341; }
+    .r-low  { color: #e07a7a; }
     td.comment-cell { max-width: 360px; }
     .comment { color: var(--fg); }
+    td.email-cell { font-size: 0.78rem; color: var(--fg); word-break: break-all; max-width: 200px; }
     .empty { padding: 3rem 0; text-align: center; color: var(--dim); font-style: italic; }
     td.id a.ops-link { color: var(--dim); }
     td.id a.ops-link:hover { color: var(--gold); }
@@ -779,6 +802,7 @@ function renderFunnelBody(readings: Reading[]): string {
   <td class="kind-cell">${renderKindBadge(r.clientKind)}</td>
   ${renderWhoCell(r)}
   ${renderBirthCell(r)}
+  ${renderEmailCell(r)}
   <td class="flag">${r.scrolledPastFree ? CHECK : DASH}</td>
   <td class="flag">${r.listenedFree ? CHECK : DASH}</td>
   <td class="flag">${r.listenedLocked ? CHECK : DASH}</td>
@@ -817,6 +841,7 @@ function renderFunnelBody(readings: Reading[]): string {
         <th>Tür</th>
         <th>Kim</th>
         <th>Doğum</th>
+        <th>E-posta</th>
         <th>Scroll</th>
         <th>Dinle: Karakter</th>
         <th>Dinle: Kilitli</th>
@@ -858,8 +883,10 @@ function renderRatingsBody(feedbackReadings: Reading[], paidCount: number): stri
   <td class="kind-cell">${renderKindBadge(r.clientKind)}</td>
   ${renderWhoCell(r)}
   ${renderBirthCell(r)}
+  ${renderEmailCell(r)}
   <td>${renderStars(r.feedbackRating)}</td>
   <td class="comment-cell">${renderComment(r.feedbackText)}</td>
+  <td class="id"><a class="ops-link" href="/admin/ops?id=${esc(r.id)}">işlem →</a></td>
 </tr>`;
     })
     .join("\n");
@@ -867,7 +894,7 @@ function renderRatingsBody(feedbackReadings: Reading[], paidCount: number): stri
   return `  <p class="meta">${esc(String(total))} değerlendirme. Yenilemek için sayfayı yenile.</p>
 
   <div class="stats">
-    <div class="stat"><div class="stat-label">Ortalama puan</div><div class="stat-value">${avg == null ? "—" : avg.toFixed(1)}<span class="stat-pct">${avg == null ? "" : "/ 5"}</span></div><div class="stat-sub">${esc(distHtml)}</div></div>
+    <div class="stat"><div class="stat-label">Ortalama puan</div><div class="stat-value">${avg == null ? "—" : `<span class="${avg >= 4 ? "r-high" : avg >= 3 ? "r-mid" : "r-low"}">${avg.toFixed(1)}</span>`}<span class="stat-pct">${avg == null ? "" : "/ 5"}</span></div><div class="stat-sub">${esc(distHtml)}</div></div>
     <div class="stat"><div class="stat-label">Toplam değerlendirme</div><div class="stat-value">${esc(String(total))}</div></div>
     <div class="stat"><div class="stat-label">Geri bildirim oranı</div><div class="stat-value">${responseRate}</div><div class="stat-sub">${esc(String(total))} / ${esc(String(paidCount))} ödeyen</div></div>
   </div>
@@ -882,8 +909,10 @@ function renderRatingsBody(feedbackReadings: Reading[], paidCount: number): stri
         <th>Tür</th>
         <th>Kim</th>
         <th>Doğum</th>
+        <th>E-posta</th>
         <th>Puan</th>
         <th>Yorum</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -896,13 +925,22 @@ ${rows}
 // `reading` is the looked-up reading (?id=…), or null if none/not found.
 function renderOpsBody(
   reading: Reading | null,
-  opts: { lookupId: string; notFound: boolean; resetDone: boolean },
+  opts: {
+    lookupId: string;
+    notFound: boolean;
+    resetDone: boolean;
+    emailSynced: string | null;
+  },
 ): string {
-  const { lookupId, notFound, resetDone } = opts;
+  const { lookupId, notFound, resetDone, emailSynced } = opts;
 
   let notice = "";
   if (resetDone) {
     notice = `<div class="ops-note ok">✓ Ödeme geri alındı — okuma artık ücretsiz (kilitli) durumda.</div>`;
+  } else if (emailSynced === "1") {
+    notice = `<div class="ops-note ok">✓ E-posta Stripe'tan alındı ve kaydedildi.</div>`;
+  } else if (emailSynced === "0") {
+    notice = `<div class="ops-note warn">Stripe session'da e-posta bulunamadı.</div>`;
   } else if (notFound) {
     notice = `<div class="ops-note warn">Bu id ile okuma bulunamadı.</div>`;
   }
@@ -926,9 +964,20 @@ function renderOpsBody(
     <div class="ops-row"><span class="k">Oluşturuldu</span><span class="v">${esc(created)}</span></div>
     <div class="ops-row"><span class="k">Durum</span><span class="v">${reading.unlocked ? "Ödendi (açık)" : "Ücretsiz (kilitli)"}</span></div>
     <div class="ops-row"><span class="k">Ödeme zamanı</span><span class="v">${esc(paidAt)}</span></div>
+    <div class="ops-row"><span class="k">E-posta</span><span class="v">${esc(reading.customerEmail ?? "—")}</span></div>
     <div class="ops-row"><span class="k">Stripe session</span><span class="v">${esc(reading.stripeSessionId ?? "—")}</span></div>
     <div class="ops-row"><span class="k">Puan</span><span class="v">${reading.feedbackRating ?? "—"}</span></div>
   </div>`;
+
+    // Sync email — only meaningful when there's a Stripe session to read
+    // from. (New payments already capture the email at webhook time; this
+    // is the manual backfill for older readings.)
+    if (reading.stripeSessionId) {
+      detail += `
+  <form method="post" action="/api/admin/sync-email/${esc(reading.id)}" style="margin-bottom:1.4rem">
+    <button class="ops-btn" type="submit">E-postayı Stripe'tan al →</button>
+  </form>`;
+    }
 
     if (reading.unlocked) {
       // The confirm() interpolates only the id (a UUID — no quotes), never
@@ -973,6 +1022,7 @@ app.get("/admin/ops", async (c) => {
   if (!checkBasicAuth(c, c.env)) return unauthorized();
   const lookupId = c.req.query("id") ?? "";
   const resetDone = c.req.query("reset") === "1";
+  const emailSynced = c.req.query("email") ?? null;
   let reading: Reading | null = null;
   let notFound = false;
   if (lookupId) {
@@ -982,7 +1032,7 @@ app.get("/admin/ops", async (c) => {
   return c.html(
     renderAdminShell(
       "ops",
-      renderOpsBody(reading, { lookupId, notFound, resetDone }),
+      renderOpsBody(reading, { lookupId, notFound, resetDone, emailSynced }),
     ),
   );
 });
@@ -996,6 +1046,27 @@ app.post("/api/admin/reset-payment/:id", async (c) => {
   await resetPaymentForAdmin(c.env.DB, id);
   console.log("[admin] payment reset", { id });
   return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}&reset=1`, 303);
+});
+
+// Backfill a reading's customer email from its stored Stripe session.
+// (New payments capture it at webhook time; this is for older readings.)
+app.post("/api/admin/sync-email/:id", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const id = c.req.param("id");
+  const reading = await getReading(c.env.DB, id);
+  let synced = "0";
+  if (reading?.stripeSessionId) {
+    const email = await fetchSessionEmail(c.env, reading.stripeSessionId);
+    if (email) {
+      await setCustomerEmail(c.env.DB, id, email);
+      synced = "1";
+      console.log("[admin] email synced", { id });
+    }
+  }
+  return c.redirect(
+    `/admin/ops?id=${encodeURIComponent(id)}&email=${synced}`,
+    303,
+  );
 });
 
 // ----- SPA fallback ---------------------------------------------------------

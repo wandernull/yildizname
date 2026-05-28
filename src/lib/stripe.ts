@@ -251,6 +251,32 @@ export async function fetchInvoiceMetadata(
   };
 }
 
+// Fetch a Checkout Session's customer email — used by the admin "Sync
+// email" op to backfill `customer_email` on older paid readings (new
+// payments capture it directly off the webhook event, no fetch needed).
+// Returns null if the session has no email or the lookup fails.
+export async function fetchSessionEmail(
+  env: Env,
+  sessionId: string,
+): Promise<string | null> {
+  const res = await fetch(
+    `${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(sessionId)}`,
+    { headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } },
+  );
+  if (!res.ok) {
+    console.warn("[stripe] session fetch failed", {
+      sessionId,
+      status: res.status,
+    });
+    return null;
+  }
+  const session = (await res.json()) as {
+    customer_details?: { email?: string | null } | null;
+    customer_email?: string | null;
+  };
+  return session.customer_details?.email ?? session.customer_email ?? null;
+}
+
 // Verify the Stripe webhook signature header. Header format is
 // "t=TIMESTAMP,v1=SIG[,v0=...]". The signed payload is
 // `${timestamp}.${rawBody}` HMAC-SHA256'd with the webhook signing

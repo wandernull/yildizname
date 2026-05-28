@@ -19,6 +19,7 @@ interface ReadingRow {
   paid_at: string | null;
   invoice_hosted_url: string | null;
   invoice_pdf_url: string | null;
+  customer_email: string | null;
   viewer_ip: string | null;
   client_kind: string | null;
   scrolled_past_free: number;
@@ -37,7 +38,7 @@ interface ReadingRow {
 const READING_COLUMNS = `
   id, form_data, sections, unlocked, status, error, created_at,
   stripe_session_id, stripe_payment_intent_id, paid_at,
-  invoice_hosted_url, invoice_pdf_url,
+  invoice_hosted_url, invoice_pdf_url, customer_email,
   viewer_ip, client_kind,
   scrolled_past_free, listened_free, listened_locked,
   listened_chain, clicked_unlock, clicked_unlock_at,
@@ -67,6 +68,7 @@ function rowToReading(row: ReadingRow): Reading {
     paidAt: row.paid_at,
     invoiceHostedUrl: row.invoice_hosted_url,
     invoicePdfUrl: row.invoice_pdf_url,
+    customerEmail: row.customer_email,
     viewerIp: row.viewer_ip,
     clientKind:
       row.client_kind === "web" ||
@@ -290,6 +292,7 @@ export async function markReadingPaid(
     paymentIntentId: string | null;
     invoiceHostedUrl: string | null;
     invoicePdfUrl: string | null;
+    customerEmail: string | null;
   },
 ): Promise<Reading | null> {
   const existing = await getReading(db, id);
@@ -306,7 +309,8 @@ export async function markReadingPaid(
              stripe_payment_intent_id = ?,
              paid_at = ?,
              invoice_hosted_url = ?,
-             invoice_pdf_url = ?
+             invoice_pdf_url = ?,
+             customer_email = ?
        WHERE id = ?`,
     )
     .bind(
@@ -315,10 +319,25 @@ export async function markReadingPaid(
       new Date().toISOString(),
       payment.invoiceHostedUrl,
       payment.invoicePdfUrl,
+      payment.customerEmail,
       id,
     )
     .run();
   return getReading(db, id);
+}
+
+// Backfill the customer email on an existing reading (admin "Sync email"
+// op). Unlike markReadingPaid this doesn't touch payment state — it only
+// sets the email, so it's safe to run on an already-paid reading.
+export async function setCustomerEmail(
+  db: D1Database,
+  id: string,
+  email: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE readings SET customer_email = ? WHERE id = ?`)
+    .bind(email, id)
+    .run();
 }
 
 // Admin op (the /admin Ops page): roll a reading back to its free,

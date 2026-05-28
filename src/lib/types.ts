@@ -86,6 +86,9 @@ export interface Reading {
   paidAt: string | null;
   invoiceHostedUrl: string | null;
   invoicePdfUrl: string | null;
+  // Customer email from the Stripe Checkout Session (migration 0007).
+  // Auto-captured at webhook time; backfillable via the admin Ops page.
+  customerEmail: string | null;
   // Funnel-analytics fields (migrations 0004 + 0005). Populated by the
   // server on first read (viewer_ip, client_kind) and by POST /api/track/:id
   // (the event flags).
