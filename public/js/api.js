@@ -57,7 +57,8 @@ export function ttsUrl(readingId, section) {
 // event are no-ops server-side (idempotent flags).
 //
 // Valid events: 'scrolled_past_free', 'listened_free', 'listened_locked',
-// 'listened_chain', 'clicked_unlock'.
+// 'listened_chain', 'clicked_unlock', 'viewed_feedback_cta',
+// 'clicked_feedback_cta'.
 export function trackEvent(readingId, event) {
   if (!readingId) return Promise.resolve(null);
   return fetch(`/api/track/${encodeURIComponent(readingId)}`, {
@@ -69,4 +70,15 @@ export function trackEvent(readingId, event) {
     // browser redirects to Stripe).
     keepalive: true,
   }).catch(() => null);
+}
+
+// Submit a paid user's rating (1-5, required) + optional comment.
+// Throws on non-2xx (caller shows the error in the modal). Paid-only —
+// the server returns 403 for unlocked=0 readings. One-shot server-side:
+// a second submit is a silent no-op that still returns success.
+export function submitFeedback(readingId, rating, text) {
+  return jsonRequest(`/api/feedback/${encodeURIComponent(readingId)}`, {
+    method: "POST",
+    body: JSON.stringify({ rating, text }),
+  });
 }

@@ -3,11 +3,14 @@ import {
   attachStripeSession,
   captureClientKind,
   captureViewerIp,
+  countPaidReadings,
   getReading,
   insertReading,
   listReadingsForAdmin,
+  listReadingsWithFeedback,
   markEvent,
   markReadingPaid,
+  submitFeedback,
 } from "./lib/db";
 import { generateYildizname } from "./lib/llm";
 import {
@@ -206,6 +209,9 @@ app.get("/api/reading/:id", async (c) => {
     // the frontend (we just don't render the link when missing).
     invoiceHostedUrl: reading.invoiceHostedUrl,
     invoicePdfUrl: reading.invoicePdfUrl,
+    // Whether this paid reading already has feedback — the frontend uses
+    // it to decide whether to show the feedback sticky CTA (one-shot).
+    feedbackGiven: reading.feedbackRating !== null,
   });
 });
 
@@ -236,6 +242,55 @@ app.post("/api/track/:id", async (c) => {
   } catch (err) {
     console.warn("[track] mark event failed", { id, event, err });
     return c.json({ ok: false }, 500);
+  }
+});
+
+// POST /api/feedback/:id — paid-only rate + feedback. Body:
+//   { rating: 1-5 (required), text?: string (optional, <= 2000 chars) }
+// Guards: reading must exist AND be unlocked. One-shot — submitFeedback
+// no-ops if a rating already exists (first submission wins), so a
+// double-submit from a flaky network returns success without clobbering.
+const FEEDBACK_TEXT_MAX = 2000;
+app.post("/api/feedback/:id", async (c) => {
+  const id = c.req.param("id");
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Geçersiz istek." }, 400);
+  }
+  const b = (body ?? {}) as { rating?: unknown; text?: unknown };
+
+  // Rating is required, integer 1..5.
+  const rating = Number(b.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return c.json({ error: "Puan 1 ile 5 arasında olmalı." }, 400);
+  }
+  // Text is optional; trim + length-cap if present.
+  let text: string | null = null;
+  if (typeof b.text === "string") {
+    const trimmed = b.text.trim();
+    if (trimmed.length > FEEDBACK_TEXT_MAX) {
+      return c.json({ error: "Yorum çok uzun." }, 400);
+    }
+    text = trimmed.length > 0 ? trimmed : null;
+  }
+
+  const reading = await getReading(c.env.DB, id);
+  if (!reading) {
+    return c.json({ error: "Okuma bulunamadı." }, 404);
+  }
+  // The gate: feedback is a paid-only feature.
+  if (!reading.unlocked) {
+    return c.json({ error: "Bu özellik yalnızca açılmış okumalar için." }, 403);
+  }
+
+  try {
+    await submitFeedback(c.env.DB, id, { rating, text });
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("[feedback] submit failed", { id, err });
+    return c.json({ error: "Geri bildirim kaydedilemedi." }, 500);
   }
 });
 
@@ -575,52 +630,55 @@ function esc(s: string | null | undefined): string {
 const CHECK = "✓";
 const DASH = "·";
 
-function renderAdminPage(readings: Reading[]): string {
-  const total = readings.length;
-  const scrolled = readings.filter((r) => r.scrolledPastFree).length;
-  const listenedFree = readings.filter((r) => r.listenedFree).length;
-  const listenedLocked = readings.filter((r) => r.listenedLocked).length;
-  const clickedUnlock = readings.filter((r) => r.clickedUnlock).length;
-  const paid = readings.filter((r) => r.unlocked).length;
-  const pct = (n: number) => (total === 0 ? "—" : `${Math.round((n / total) * 100)}%`);
-
-  const rows = readings
-    .map((r) => {
-      const f = r.formData;
-      const created = r.createdAt.replace("T", " ").slice(0, 19);
-      const kindLabel = r.clientKind
-        ? `<span class="kind ${r.clientKind}">${r.clientKind}</span>`
-        : `<span class="kind dim">—</span>`;
-      return `<tr>
-  <td class="when">${esc(created)}</td>
-  <td class="ip">${esc(r.viewerIp ?? "—")}</td>
-  <td class="kind-cell">${kindLabel}</td>
-  <td class="who">
+// Shared cell renderers used by both admin tables.
+function renderKindBadge(kind: string | null): string {
+  return kind
+    ? `<span class="kind ${kind}">${kind}</span>`
+    : `<span class="kind dim">—</span>`;
+}
+function renderWhoCell(r: Reading): string {
+  const f = r.formData;
+  return `<td class="who">
     <strong>${esc(f.name)}</strong><br />
     <span class="dim">anne: ${esc(f.motherName)}</span>
-  </td>
-  <td class="when2">
+  </td>`;
+}
+function renderBirthCell(r: Reading): string {
+  const f = r.formData;
+  return `<td class="when2">
     ${esc(f.birthDate)}<br />
     <span class="dim">${esc(f.birthPlace)}</span>
-  </td>
-  <td class="flag">${r.scrolledPastFree ? CHECK : DASH}</td>
-  <td class="flag">${r.listenedFree ? CHECK : DASH}</td>
-  <td class="flag">${r.listenedLocked ? CHECK : DASH}</td>
-  <td class="flag">${r.listenedChain ? CHECK : DASH}</td>
-  <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
-  <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
-  <td class="id"><a href="/okuma/${esc(r.id)}" target="_blank">aç →</a></td>
-</tr>`;
-    })
-    .join("\n");
+  </td>`;
+}
+function renderStars(rating: number | null): string {
+  if (rating == null) return `<span class="dim">—</span>`;
+  const full = "★".repeat(rating);
+  const empty = "☆".repeat(Math.max(0, 5 - rating));
+  return `<span class="stars">${full}<span class="stars-empty">${empty}</span></span>`;
+}
+function renderComment(text: string | null): string {
+  if (!text) return `<span class="dim">—</span>`;
+  const truncated = text.length > 70 ? text.slice(0, 70) + "…" : text;
+  // title attr gives the full text on hover.
+  return `<span class="comment" title="${esc(text)}">${esc(truncated)}</span>`;
+}
 
+// Shared HTML scaffold: head + CSS + tab nav. activeTab highlights the
+// current page. Both admin pages render their body through this so the
+// styling + nav stay in lockstep.
+function renderAdminShell(
+  activeTab: "funnel" | "ratings",
+  bodyHtml: string,
+): string {
+  const tab = (href: string, label: string, key: string) =>
+    `<a href="${href}" class="${activeTab === key ? "active" : ""}">${label}</a>`;
   return `<!doctype html>
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>yıldızna.me admin — okuma istatistikleri</title>
+  <title>yıldızna.me admin</title>
   <style>
     :root {
       --bg: #0a0e1a; --fg: #e8e4d8; --dim: #8892a3; --gold: #c9a84c;
@@ -634,12 +692,17 @@ function renderAdminPage(readings: Reading[]): string {
       font-size: 14px; line-height: 1.5;
     }
     h1 { margin: 0 0 0.4rem; font-size: 1.4rem; color: var(--gold); font-weight: 600; }
-    .meta { color: var(--dim); margin-bottom: 1.6rem; font-size: 0.85rem; }
-    .stats { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 2rem; }
+    .meta { color: var(--dim); margin-bottom: 1.2rem; font-size: 0.85rem; }
+    .admin-nav { display: flex; gap: 0.25rem; margin-bottom: 1.6rem; border-bottom: 1px solid var(--border); }
+    .admin-nav a { padding: 0.5rem 1.1rem; color: var(--dim); text-decoration: none; font-size: 0.9rem; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 0.15s ease; }
+    .admin-nav a:hover { color: var(--fg); }
+    .admin-nav a.active { color: var(--gold); border-bottom-color: var(--gold); font-weight: 600; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 2rem; }
     .stat { background: var(--row2); border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem 1rem; }
     .stat-label { color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
     .stat-value { font-size: 1.5rem; color: var(--gold); font-weight: 600; }
     .stat-pct { font-size: 0.85rem; color: var(--dim); margin-left: 0.4rem; }
+    .stat-sub { font-size: 0.75rem; color: var(--dim); margin-top: 0.3rem; }
     table { width: 100%; border-collapse: collapse; }
     th { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border); color: var(--gold); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; position: sticky; top: 0; background: var(--bg); }
     td { padding: 0.75rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
@@ -658,12 +721,55 @@ function renderAdminPage(readings: Reading[]): string {
     .kind.dim    { background: transparent; color: var(--dim); }
     td.id a { color: var(--gold); text-decoration: none; font-size: 0.78rem; }
     td.id a:hover { text-decoration: underline; }
+    .stars { color: var(--gold); letter-spacing: 1px; white-space: nowrap; font-size: 0.95rem; }
+    .stars-empty { color: rgba(201,168,76,0.3); }
+    td.comment-cell { max-width: 360px; }
+    .comment { color: var(--fg); }
     .empty { padding: 3rem 0; text-align: center; color: var(--dim); font-style: italic; }
   </style>
 </head>
 <body>
-  <h1>yıldızna.me — okuma istatistikleri</h1>
-  <p class="meta">Son ${esc(String(total))} okuma. Yenilemek için sayfayı yenile.</p>
+  <h1>yıldızna.me admin</h1>
+  <nav class="admin-nav">
+    ${tab("/admin", "Funnel", "funnel")}
+    ${tab("/admin/ratings", "Puanlar", "ratings")}
+  </nav>
+${bodyHtml}
+</body>
+</html>`;
+}
+
+// Funnel page body — conversion analytics over all readings.
+function renderFunnelBody(readings: Reading[]): string {
+  const total = readings.length;
+  const scrolled = readings.filter((r) => r.scrolledPastFree).length;
+  const listenedFree = readings.filter((r) => r.listenedFree).length;
+  const listenedLocked = readings.filter((r) => r.listenedLocked).length;
+  const clickedUnlock = readings.filter((r) => r.clickedUnlock).length;
+  const paid = readings.filter((r) => r.unlocked).length;
+  const pct = (n: number) => (total === 0 ? "—" : `${Math.round((n / total) * 100)}%`);
+
+  const rows = readings
+    .map((r) => {
+      const created = r.createdAt.replace("T", " ").slice(0, 19);
+      return `<tr>
+  <td class="when">${esc(created)}</td>
+  <td class="ip">${esc(r.viewerIp ?? "—")}</td>
+  <td class="kind-cell">${renderKindBadge(r.clientKind)}</td>
+  ${renderWhoCell(r)}
+  ${renderBirthCell(r)}
+  <td class="flag">${r.scrolledPastFree ? CHECK : DASH}</td>
+  <td class="flag">${r.listenedFree ? CHECK : DASH}</td>
+  <td class="flag">${r.listenedLocked ? CHECK : DASH}</td>
+  <td class="flag">${r.listenedChain ? CHECK : DASH}</td>
+  <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
+  <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
+  <td class="id"><a href="/okuma/${esc(r.id)}" target="_blank">aç →</a></td>
+</tr>`;
+    })
+    .join("\n");
+
+  return `  <p class="meta">Son ${esc(String(total))} okuma. Yenilemek için sayfayı yenile.</p>
 
   <div class="stats">
     <div class="stat"><div class="stat-label">Toplam</div><div class="stat-value">${esc(String(total))}</div></div>
@@ -696,15 +802,84 @@ function renderAdminPage(readings: Reading[]): string {
     <tbody>
 ${rows}
     </tbody>
-  </table>`}
-</body>
-</html>`;
+  </table>`}`;
+}
+
+// Ratings page body — feedback from paid users.
+function renderRatingsBody(feedbackReadings: Reading[], paidCount: number): string {
+  const total = feedbackReadings.length;
+  const avg =
+    total === 0
+      ? null
+      : feedbackReadings.reduce((s, r) => s + (r.feedbackRating ?? 0), 0) / total;
+  const responseRate =
+    paidCount === 0 ? "—" : `${Math.round((total / paidCount) * 100)}%`;
+  // Distribution 5★ → 1★.
+  const dist = [5, 4, 3, 2, 1].map(
+    (star) => feedbackReadings.filter((r) => r.feedbackRating === star).length,
+  );
+  const distHtml = [5, 4, 3, 2, 1]
+    .map((star, i) => `${star}★ ×${dist[i]}`)
+    .join("  ");
+
+  const rows = feedbackReadings
+    .map((r) => {
+      const rated = (r.feedbackAt ?? "").replace("T", " ").slice(0, 19);
+      return `<tr>
+  <td class="when">${esc(rated)}</td>
+  <td class="ip">${esc(r.viewerIp ?? "—")}</td>
+  <td class="kind-cell">${renderKindBadge(r.clientKind)}</td>
+  ${renderWhoCell(r)}
+  ${renderBirthCell(r)}
+  <td>${renderStars(r.feedbackRating)}</td>
+  <td class="comment-cell">${renderComment(r.feedbackText)}</td>
+</tr>`;
+    })
+    .join("\n");
+
+  return `  <p class="meta">${esc(String(total))} değerlendirme. Yenilemek için sayfayı yenile.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Ortalama puan</div><div class="stat-value">${avg == null ? "—" : avg.toFixed(1)}<span class="stat-pct">${avg == null ? "" : "/ 5"}</span></div><div class="stat-sub">${esc(distHtml)}</div></div>
+    <div class="stat"><div class="stat-label">Toplam değerlendirme</div><div class="stat-value">${esc(String(total))}</div></div>
+    <div class="stat"><div class="stat-label">Geri bildirim oranı</div><div class="stat-value">${responseRate}</div><div class="stat-sub">${esc(String(total))} / ${esc(String(paidCount))} ödeyen</div></div>
+  </div>
+
+  ${total === 0
+    ? `<div class="empty">Henüz değerlendirme yok.</div>`
+    : `<table>
+    <thead>
+      <tr>
+        <th>Zaman</th>
+        <th>IP</th>
+        <th>Tür</th>
+        <th>Kim</th>
+        <th>Doğum</th>
+        <th>Puan</th>
+        <th>Yorum</th>
+      </tr>
+    </thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>`}`;
 }
 
 app.get("/admin", async (c) => {
   if (!checkBasicAuth(c, c.env)) return unauthorized();
   const readings = await listReadingsForAdmin(c.env.DB);
-  return c.html(renderAdminPage(readings));
+  return c.html(renderAdminShell("funnel", renderFunnelBody(readings)));
+});
+
+app.get("/admin/ratings", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const [feedbackReadings, paidCount] = await Promise.all([
+    listReadingsWithFeedback(c.env.DB),
+    countPaidReadings(c.env.DB),
+  ]);
+  return c.html(
+    renderAdminShell("ratings", renderRatingsBody(feedbackReadings, paidCount)),
+  );
 });
 
 // ----- SPA fallback ---------------------------------------------------------

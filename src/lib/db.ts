@@ -27,6 +27,11 @@ interface ReadingRow {
   listened_chain: number;
   clicked_unlock: number;
   clicked_unlock_at: string | null;
+  feedback_rating: number | null;
+  feedback_text: string | null;
+  feedback_at: string | null;
+  viewed_feedback_cta: number;
+  clicked_feedback_cta: number;
 }
 
 const READING_COLUMNS = `
@@ -35,7 +40,9 @@ const READING_COLUMNS = `
   invoice_hosted_url, invoice_pdf_url,
   viewer_ip, client_kind,
   scrolled_past_free, listened_free, listened_locked,
-  listened_chain, clicked_unlock, clicked_unlock_at
+  listened_chain, clicked_unlock, clicked_unlock_at,
+  feedback_rating, feedback_text, feedback_at,
+  viewed_feedback_cta, clicked_feedback_cta
 `;
 
 function rowToReading(row: ReadingRow): Reading {
@@ -73,6 +80,11 @@ function rowToReading(row: ReadingRow): Reading {
     listenedChain: row.listened_chain === 1,
     clickedUnlock: row.clicked_unlock === 1,
     clickedUnlockAt: row.clicked_unlock_at,
+    feedbackRating: row.feedback_rating,
+    feedbackText: row.feedback_text,
+    feedbackAt: row.feedback_at,
+    viewedFeedbackCta: row.viewed_feedback_cta === 1,
+    clickedFeedbackCta: row.clicked_feedback_cta === 1,
   };
 }
 
@@ -160,13 +172,17 @@ export async function markEvent(
     return;
   }
   // Map the event key to the column name. The TS type guarantees event is
-  // one of the known keys, so this is a closed set.
+  // one of the known keys, so this is a closed set. (clicked_unlock is
+  // handled above with its timestamp; it's listed here too so the Record
+  // is exhaustive over TrackEvent.)
   const column: Record<TrackEvent, string> = {
     scrolled_past_free: "scrolled_past_free",
     listened_free: "listened_free",
     listened_locked: "listened_locked",
     listened_chain: "listened_chain",
     clicked_unlock: "clicked_unlock",
+    viewed_feedback_cta: "viewed_feedback_cta",
+    clicked_feedback_cta: "clicked_feedback_cta",
   };
   await db
     .prepare(`UPDATE readings SET ${column[event]} = 1 WHERE id = ?`)
@@ -191,6 +207,63 @@ export async function listReadingsForAdmin(
     .bind(limit)
     .all<ReadingRow>();
   return (result.results ?? []).map(rowToReading);
+}
+
+// Ratings page query. Only readings that submitted feedback, newest
+// rating first (by feedback_at, not created_at — we care about when they
+// rated). Same 500 cap as the funnel list.
+export async function listReadingsWithFeedback(
+  db: D1Database,
+  limit: number = 500,
+): Promise<Reading[]> {
+  const result = await db
+    .prepare(
+      `SELECT ${READING_COLUMNS}
+         FROM readings
+        WHERE feedback_rating IS NOT NULL
+        ORDER BY feedback_at DESC
+        LIMIT ?`,
+    )
+    .bind(limit)
+    .all<ReadingRow>();
+  return (result.results ?? []).map(rowToReading);
+}
+
+// Count of paid readings — the denominator for the ratings page's
+// "response rate" stat (feedbacks / paid). Cheap aggregate, accurate
+// even past the 500-row table cap.
+export async function countPaidReadings(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare(`SELECT COUNT(*) AS n FROM readings WHERE unlocked = 1`)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+// Record a paid user's rating + optional comment. Paid-only is enforced
+// by the route (checks reading.unlocked). One-shot: the COALESCE keeps
+// the first submission's values — a second call can only fill fields
+// that were still NULL, never overwrite an existing rating. Returns the
+// updated reading, or null if the reading doesn't exist.
+export async function submitFeedback(
+  db: D1Database,
+  id: string,
+  feedback: { rating: number; text: string | null },
+): Promise<Reading | null> {
+  const existing = await getReading(db, id);
+  if (!existing) return null;
+  // Already rated → no-op (one-shot). Return current state.
+  if (existing.feedbackRating !== null) return existing;
+  await db
+    .prepare(
+      `UPDATE readings
+          SET feedback_rating = ?,
+              feedback_text = ?,
+              feedback_at = ?
+        WHERE id = ? AND feedback_rating IS NULL`,
+    )
+    .bind(feedback.rating, feedback.text, new Date().toISOString(), id)
+    .run();
+  return getReading(db, id);
 }
 
 // Called from POST /api/unlock when we create a Stripe Checkout session —

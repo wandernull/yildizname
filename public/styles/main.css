@@ -479,6 +479,193 @@ h4 {
   font-size: 0.9rem;
 }
 
+/* ============================================================
+ * Feedback sticky CTA + modal (paid-only)
+ * ============================================================
+ * Unlike the unlock sticky (mobile-only), the feedback sticky shows on
+ * ALL viewports — it's the sole feedback entry point, so desktop paid
+ * users need it too. Subtler than the gold-fill payment CTA: a gold
+ * outline pill that reads as "optional nicety", not "primary action". */
+.feedback-sticky {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  padding: 0.75rem 1rem;
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  background: linear-gradient(
+    180deg,
+    rgba(10, 14, 26, 0.78) 0%,
+    var(--deep) 55%
+  );
+  border-top: 1px solid rgba(201, 168, 76, 0.28);
+  text-align: center;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.feedback-sticky.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.feedback-sticky-trigger {
+  display: inline-block;
+  background: transparent;
+  border: 1px solid var(--gold);
+  color: var(--gold-light);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+  padding: 0.7rem 1.6rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.25s ease, transform 0.2s ease;
+}
+.feedback-sticky-trigger:hover,
+.feedback-sticky-trigger:active {
+  background: rgba(201, 168, 76, 0.12);
+  transform: translateY(-1px);
+}
+
+/* Feedback modal — same native <dialog> shell as the unlock modal. */
+.feedback-modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: auto;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  color: var(--silver);
+}
+.feedback-modal::backdrop {
+  background: rgba(6, 9, 16, 0.86);
+  backdrop-filter: blur(2px);
+}
+.feedback-modal-content {
+  background: var(--deep);
+  border: 1px solid rgba(201, 168, 76, 0.35);
+  border-radius: 4px;
+  padding: 2.5rem 1.75rem 2.25rem;
+  width: min(420px, calc(100vw - 2.5rem));
+  text-align: center;
+  position: relative;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.feedback-modal-close {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.6rem;
+  background: transparent;
+  border: none;
+  color: rgba(184, 196, 212, 0.55);
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  transition: color 0.3s ease;
+}
+.feedback-modal-close:hover {
+  color: var(--gold-light);
+}
+.feedback-modal-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.5rem, 4.5vw, 1.85rem);
+  color: var(--gold-light);
+  margin: 0 0 0.5rem;
+  letter-spacing: 0.015em;
+}
+.feedback-modal-body {
+  font-family: var(--font-body);
+  color: var(--silver);
+  line-height: 1.6;
+  font-size: 1rem;
+  margin: 0 0 1.5rem;
+}
+.feedback-stars {
+  display: flex;
+  justify-content: center;
+  gap: 0.3rem;
+  margin: 0 0 1.5rem;
+}
+.feedback-star {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 2.3rem;
+  line-height: 1;
+  padding: 0.1rem 0.15rem;
+  color: rgba(201, 168, 76, 0.25);
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+.feedback-star.lit {
+  color: var(--gold-light);
+  text-shadow: 0 0 12px rgba(232, 208, 138, 0.35);
+}
+.feedback-star:hover {
+  transform: scale(1.12);
+}
+.feedback-text {
+  width: 100%;
+  background: rgba(10, 14, 26, 0.6);
+  border: 1px solid rgba(201, 168, 76, 0.25);
+  border-radius: 3px;
+  color: var(--silver);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  padding: 0.75rem;
+  resize: vertical;
+  margin: 0 0 1.25rem;
+}
+.feedback-text::placeholder {
+  color: rgba(184, 196, 212, 0.4);
+  font-style: italic;
+}
+.feedback-text:focus {
+  outline: none;
+  border-color: rgba(201, 168, 76, 0.6);
+}
+.feedback-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.feedback-error {
+  margin: 1rem 0 0;
+  color: #d97a7a;
+  font-style: italic;
+  font-size: 0.9rem;
+}
+.feedback-thanks {
+  text-align: center;
+  padding: 1rem 0;
+}
+.feedback-thanks-mark {
+  font-size: 2rem;
+  color: var(--gold);
+  margin: 0 0 0.5rem;
+}
+.feedback-thanks-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(1.4rem, 4vw, 1.7rem);
+  color: var(--gold-light);
+  margin: 0 0 0.4rem;
+}
+.feedback-thanks-body {
+  color: var(--silver);
+  margin: 0 0 1.5rem;
+}
+
 /* "Yeni bir okuma" footer on /okuma/:id — non-tech users get a clear way
    to start another reading without copy-pasting URLs. */
 .result-new-reading {

@@ -1203,6 +1203,136 @@ function wireStickyAndModal({ root, id, router, sectionsHost, disposables }) {
   });
 }
 
+// Wires the paid-only feedback sticky CTA + modal. Called only when the
+// reading is unlocked AND no feedback exists yet (data.feedbackGiven is
+// false). Mirrors wireStickyAndModal's shape: a fade-in sticky, a
+// <dialog> modal, disposables for cleanup. The modal holds a 5-star
+// (required) widget + optional textarea; submit posts to /api/feedback
+// and morphs the modal into a thank-you state, then permanently hides
+// the sticky for this reading.
+function wireFeedback({ root, id, disposables }) {
+  const sticky = root.querySelector(".feedback-sticky");
+  const stickyTrigger = root.querySelector(".feedback-sticky-trigger");
+  const modal = root.querySelector(".feedback-modal");
+  const formEl = root.querySelector(".feedback-form");
+  const thanksEl = root.querySelector(".feedback-thanks");
+  const stars = Array.from(root.querySelectorAll(".feedback-star"));
+  const textEl = root.querySelector(".feedback-text");
+  const submitEl = root.querySelector(".feedback-submit");
+  const errorEl = root.querySelector(".feedback-error");
+  const closeEl = root.querySelector(".feedback-modal-close");
+  const thanksCloseEl = root.querySelector(".feedback-thanks-close");
+  if (!sticky || !modal || !submitEl || stars.length === 0) return;
+
+  // Reveal the sticky a few seconds after mount so it doesn't interrupt
+  // the freshly-unlocked reader — then keep it visible EXCEPT when the
+  // page footer ("Yeni bir okuma") is on screen, so the fixed bar never
+  // covers the footer link at the bottom of the page. Mirrors the unlock
+  // sticky's hide-on-bottom behaviour.
+  sticky.hidden = false;
+  let mountedShown = false;
+  let footerVisible = false;
+  const refresh = () => {
+    const show = mountedShown && !footerVisible;
+    sticky.classList.toggle("is-visible", show);
+    sticky.setAttribute("aria-hidden", show ? "false" : "true");
+  };
+
+  const showDelay = window.setTimeout(() => {
+    mountedShown = true;
+    refresh();
+    // Funnel: the CTA became eligible to show to the user.
+    api.trackEvent(id, "viewed_feedback_cta");
+  }, 6000);
+
+  const footer = root.querySelector(".result-new-reading");
+  let footerObs = null;
+  if (footer) {
+    footerObs = new IntersectionObserver(
+      (entries) => {
+        footerVisible = entries[0].isIntersecting;
+        refresh();
+      },
+      { rootMargin: "0px 0px -40px 0px" },
+    );
+    footerObs.observe(footer);
+  }
+
+  // ----- star rating widget -----
+  let rating = 0;
+  const paint = (upto) => {
+    stars.forEach((s, i) => s.classList.toggle("lit", i < upto));
+  };
+  const setRating = (val) => {
+    rating = val;
+    stars.forEach((s, i) => s.setAttribute("aria-checked", String(i + 1 === val)));
+    paint(val);
+    submitEl.disabled = rating < 1;
+  };
+  stars.forEach((star, i) => {
+    const val = i + 1;
+    star.addEventListener("click", () => setRating(val));
+    star.addEventListener("mouseenter", () => paint(val));
+    star.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        setRating(val);
+      }
+    });
+  });
+  // Restore the chosen rating's paint when the mouse leaves the row.
+  const starsRow = root.querySelector(".feedback-stars");
+  if (starsRow) starsRow.addEventListener("mouseleave", () => paint(rating));
+
+  // ----- modal open/close -----
+  const openModal = () => {
+    if (errorEl) errorEl.hidden = true;
+    modal.showModal();
+    api.trackEvent(id, "clicked_feedback_cta");
+  };
+  stickyTrigger.addEventListener("click", openModal);
+  if (closeEl) closeEl.addEventListener("click", () => modal.close());
+  if (thanksCloseEl) thanksCloseEl.addEventListener("click", () => modal.close());
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) modal.close();
+  });
+
+  // ----- submit -----
+  submitEl.addEventListener("click", async () => {
+    if (rating < 1) return;
+    submitEl.disabled = true;
+    submitEl.textContent = "Gönderiliyor…";
+    if (errorEl) errorEl.hidden = true;
+    try {
+      const text = textEl ? textEl.value.trim() : "";
+      await api.submitFeedback(id, rating, text);
+      // Morph to thank-you state; permanently retire the sticky for this
+      // reading (matches the server's one-shot semantics).
+      if (formEl) formEl.hidden = true;
+      if (thanksEl) thanksEl.hidden = false;
+      // Permanently retire the sticky for this reading. Flip mountedShown
+      // off so the footer observer can't re-show it, then hide outright.
+      mountedShown = false;
+      sticky.classList.remove("is-visible");
+      sticky.setAttribute("aria-hidden", "true");
+      sticky.hidden = true;
+    } catch (e) {
+      submitEl.disabled = false;
+      submitEl.textContent = "Müneccime ulaştır";
+      if (errorEl) {
+        errorEl.textContent = e.message || "Geri bildirim kaydedilemedi.";
+        errorEl.hidden = false;
+      }
+    }
+  });
+
+  disposables.push(() => {
+    window.clearTimeout(showDelay);
+    if (footerObs) footerObs.disconnect();
+    if (modal.open) modal.close();
+  });
+}
+
 function makePaymentBlock() {
   const wrap = document.createElement("div");
   wrap.className = "payment-block";
@@ -1633,6 +1763,10 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
       // when the bottom payment block scrolls in).
       if (!isUnlocked) {
         wireStickyAndModal({ root, id, router, sectionsHost, disposables });
+      } else if (!data.feedbackGiven) {
+        // Paid + no feedback yet → wire the feedback sticky + modal.
+        // Already-rated readings skip this entirely (one-shot).
+        wireFeedback({ root, id, disposables });
       }
     } catch (err) {
       sectionsHost.replaceChildren();

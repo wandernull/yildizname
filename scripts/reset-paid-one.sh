@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Roll back the paid state on a SINGLE reading by id.
-# Resets unlocked + clears all Stripe metadata (migration 0003 columns).
+# Resets unlocked + clears all Stripe metadata (migration 0003 columns)
+# AND clears any feedback (migration 0006 columns) — an unpaid reading
+# can't carry feedback (it's a paid-only feature), so a full paid reset
+# wipes it too. To clear ONLY feedback while keeping the reading paid
+# (rapid feedback re-testing), use reset-feedback-one.sh instead.
 # Reading content (form_data, sections) is untouched.
 #
 # Usage:
@@ -82,10 +86,15 @@ UPDATE_SQL="UPDATE readings
        stripe_payment_intent_id = NULL,
        paid_at = NULL,
        invoice_hosted_url = NULL,
-       invoice_pdf_url = NULL
+       invoice_pdf_url = NULL,
+       feedback_rating = NULL,
+       feedback_text = NULL,
+       feedback_at = NULL,
+       viewed_feedback_cta = 0,
+       clicked_feedback_cta = 0
  WHERE id = '$ID';"
 
-VERIFY_SQL="SELECT id, unlocked, paid_at, stripe_session_id
+VERIFY_SQL="SELECT id, unlocked, paid_at, stripe_session_id, feedback_rating
               FROM readings
              WHERE id = '$ID';"
 

@@ -66,6 +66,8 @@ export const TRACK_EVENTS = [
   "listened_locked",
   "listened_chain",
   "clicked_unlock",
+  "viewed_feedback_cta",
+  "clicked_feedback_cta",
 ] as const;
 export type TrackEvent = (typeof TRACK_EVENTS)[number];
 
@@ -97,6 +99,14 @@ export interface Reading {
   listenedChain: boolean;
   clickedUnlock: boolean;
   clickedUnlockAt: string | null;
+  // Rate + feedback (migration 0006). Paid-only — populated via
+  // POST /api/feedback/:id. feedbackAt's presence is the "already gave
+  // feedback" flag the sticky CTA checks. viewed/clicked are funnel flags.
+  feedbackRating: number | null;
+  feedbackText: string | null;
+  feedbackAt: string | null;
+  viewedFeedbackCta: boolean;
+  clickedFeedbackCta: boolean;
 }
 
 // Worker bindings, declared via wrangler.toml. The wrangler types generator

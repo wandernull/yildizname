@@ -202,6 +202,18 @@
           <button type="button" class="sticky-cta-trigger">Kalan 9 bölüm →</button>
         </div>
 
+        <!-- Feedback sticky CTA. Paid-only: views.js shows this (and
+             hides the unlock sticky) when the reading is unlocked AND no
+             feedback has been left yet. Fades in a few seconds after the
+             result page mounts so it doesn't interrupt the read. Tap
+             opens the feedback modal. Dismissed permanently for this
+             reading once feedback is submitted. -->
+        <div class="feedback-sticky" aria-hidden="true" hidden>
+          <button type="button" class="feedback-sticky-trigger">
+            Müneccime bir söz bırak →
+          </button>
+        </div>
+
         <!-- Post-payment success card. Lives inside the same overlay
              that the polling spinner uses — we morph the spinner card
              into this content once the webhook confirms the unlock, so
@@ -245,6 +257,61 @@
               Kaderinin tamamını aç →
             </button>
             <p class="unlock-modal-error" hidden></p>
+          </div>
+        </dialog>
+
+        <!-- Feedback modal: opened by the feedback sticky CTA. Native
+             <dialog> for backdrop + focus trap + ESC. The form (stars +
+             textarea + submit) and the post-submit thank-you state both
+             live inside; views.js swaps between them. Rating is required;
+             submit stays disabled until at least one star is chosen. -->
+        <dialog class="feedback-modal" aria-labelledby="feedback-modal-title">
+          <div class="feedback-modal-content">
+            <button
+              type="button"
+              class="feedback-modal-close"
+              aria-label="Kapat"
+            >×</button>
+
+            <div class="feedback-form">
+              <h2 id="feedback-modal-title" class="feedback-modal-title">
+                Yıldıznamen nasıldı?
+              </h2>
+              <p class="feedback-modal-body">Müneccime bir söz bırak.</p>
+
+              <div
+                class="feedback-stars"
+                role="radiogroup"
+                aria-label="Puan"
+              >
+                <button type="button" class="feedback-star" data-value="1" role="radio" aria-checked="false" aria-label="1 yıldız">★</button>
+                <button type="button" class="feedback-star" data-value="2" role="radio" aria-checked="false" aria-label="2 yıldız">★</button>
+                <button type="button" class="feedback-star" data-value="3" role="radio" aria-checked="false" aria-label="3 yıldız">★</button>
+                <button type="button" class="feedback-star" data-value="4" role="radio" aria-checked="false" aria-label="4 yıldız">★</button>
+                <button type="button" class="feedback-star" data-value="5" role="radio" aria-checked="false" aria-label="5 yıldız">★</button>
+              </div>
+
+              <textarea
+                class="feedback-text"
+                rows="4"
+                maxlength="2000"
+                placeholder="Müneccim'in sözünden ne kaldı sende? (isteğe bağlı)"
+              ></textarea>
+
+              <button type="button" class="btn-gold-fill feedback-submit" disabled>
+                Müneccime ulaştır
+              </button>
+              <p class="feedback-error" hidden></p>
+            </div>
+
+            <div class="feedback-thanks" hidden>
+              <p class="feedback-thanks-mark" aria-hidden="true">✦</p>
+              <h2 class="feedback-thanks-title">Sözün müneccime ulaştı.</h2>
+              <p class="feedback-thanks-body">Teşekkürler.</p>
+              <button type="button" class="btn-gold-outline feedback-thanks-close">
+                Kapat
+              </button>
+            </div>
           </div>
         </dialog>
       </article>
