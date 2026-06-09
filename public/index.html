@@ -4,6 +4,36 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0e1a" />
+
+    <!-- Google Analytics 4 — prod-only loader + dev DebugView opt-in.
+         Defines window.gtag everywhere so event calls elsewhere are safe
+         no-ops off-prod. The remote gtag.js + gtag('config') only run on
+         the prod hostnames (yildizna.me / www.yildizna.me) — or, as a
+         dev opt-in, on localhost when localStorage.ga4_debug === '1'
+         (events then show in GA4 DebugView for local QA; toggle with
+         localStorage.setItem('ga4_debug','1') / removeItem('ga4_debug')).
+         A window flag guards against accidental double-injection. -->
+    <script>
+      (function () {
+        if (window.__ga4_initialized) return;
+        window.__ga4_initialized = true;
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = function () { window.dataLayer.push(arguments); };
+        var host = location.hostname;
+        var isProd = host === "yildizna.me" || host === "www.yildizna.me";
+        var isDebug = false;
+        if (!isProd && host === "localhost") {
+          try { isDebug = localStorage.getItem("ga4_debug") === "1"; } catch (e) {}
+        }
+        if (!isProd && !isDebug) return;
+        var s = document.createElement("script");
+        s.async = true;
+        s.src = "https://www.googletagmanager.com/gtag/js?id=G-68ZDSN6LVW";
+        document.head.appendChild(s);
+        gtag("js", new Date());
+        gtag("config", "G-68ZDSN6LVW", isDebug ? { debug_mode: true } : {});
+      })();
+    </script>
     <title>Yıldızname — Yıldızların altında, harflerin diliyle</title>
     <meta
       name="description"

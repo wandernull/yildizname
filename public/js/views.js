@@ -1335,6 +1335,49 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         }
       }
 
+      // ---------- GA4 funnel events ----------
+      // Safe no-op off-prod: gtag is defined by the inline <head> snippet
+      // on every page, but the remote tag only loads on prod (or with the
+      // localStorage.ga4_debug opt-in on localhost). Off-prod, calls just
+      // queue into dataLayer with no network egress.
+      //
+      // sessionStorage keys per-tab dedup re-mounts / re-fetches of the
+      // same reading. Stripe + the polling-overlay flow already make
+      // double-firing implausible, but the storage check is cheap insurance
+      // and survives the in-app-browser quirks we worry about elsewhere.
+      if (typeof window.gtag === "function") {
+        try {
+          if (!isUnlocked) {
+            // Free teaser is about to render — funnel entry point.
+            const k = "ga4_reading_started_" + id;
+            if (!sessionStorage.getItem(k)) {
+              sessionStorage.setItem(k, "1");
+              window.gtag("event", "reading_started");
+            }
+          } else if (paidRedirect && data.stripeSessionId) {
+            // Successful Stripe redirect AND the webhook has flipped the
+            // row to unlocked — the actual conversion moment.
+            // transaction_id is the Stripe Checkout Session id (cs_...)
+            // for GA4 dedup. value is hardcoded to the list price 349.99,
+            // which OVERSTATES revenue for promo-discounted purchases. To
+            // fix accurately, expose session.amount_total on
+            // /api/reading/:id and use it here. (Promo generation shipped
+            // in Phase 2a, so this is a live edge case worth fixing.)
+            const k = "ga4_purchase_" + data.stripeSessionId;
+            if (!sessionStorage.getItem(k)) {
+              sessionStorage.setItem(k, "1");
+              window.gtag("event", "report_unlocked", {
+                currency: "TRY",
+                value: 349.99,
+                transaction_id: data.stripeSessionId,
+              });
+            }
+          }
+        } catch {
+          /* analytics must never break the reading render */
+        }
+      }
+
       // Edge case: ?paid=1 but the webhook didn't fire within the poll
       // window. Replace the polling card with a polite "still processing"
       // message — user can refresh manually. Almost never happens in

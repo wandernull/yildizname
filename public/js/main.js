@@ -52,6 +52,21 @@ function setTitle(state) {
   }
 }
 
+// GA4 page_view for SPA URL changes. The very first page-load is already
+// auto-tracked by gtag('config') in the inline <head> snippet, so we only
+// fire this for SUBSEQUENT navigations (router.navigate + popstate). NOT
+// from router.setStep — those keep the URL at "/" so there's no real page
+// change to report. Safe no-op off-prod (gtag exists but the remote tag
+// never loaded, so calls just queue into dataLayer harmlessly).
+function fireGa4PageView() {
+  if (typeof window.gtag !== "function") return;
+  window.gtag("event", "page_view", {
+    page_path: window.location.pathname + window.location.search,
+    page_location: window.location.href,
+    page_title: document.title,
+  });
+}
+
 // ----- router ---------------------------------------------------------------
 
 const router = {
@@ -67,6 +82,7 @@ const router = {
     // starts at landing instead of resuming the last sub-view.
     journeyStep = null;
     render(window.location.pathname + window.location.search);
+    fireGa4PageView();
   },
   // Sub-view switch while staying at "/". No History API push — URL bar
   // doesn't move. Used for landing → form → loading transitions.
@@ -146,6 +162,7 @@ window.addEventListener("popstate", () => {
   // landing. Forward to /okuma/:id re-renders the result page.
   journeyStep = null;
   render(window.location.pathname + window.location.search);
+  fireGa4PageView();
 });
 
 document.addEventListener("click", (ev) => {
