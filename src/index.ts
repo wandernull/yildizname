@@ -710,6 +710,16 @@ function renderAdminShell(
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
   <title>yıldızna.me admin</title>
+  <!-- Auto-mute GA4 on this browser. Any /admin visit sets the
+       localStorage.ga4_admin flag that every public-page GA4 snippet
+       checks. One Basic Auth login = this browser never pollutes
+       funnel/conversion analytics again (incl. okuma links you open
+       from the admin tables for debugging). To verify real GA4 firing,
+       use a different browser or incognito (clearing the flag manually
+       won't help — any future /admin visit re-sets it). -->
+  <script>
+    try { localStorage.setItem("ga4_admin", "1"); } catch (e) {}
+  </script>
   <style>
     :root {
       --bg: #0a0e1a; --fg: #e8e4d8; --dim: #8892a3; --gold: #c9a84c;

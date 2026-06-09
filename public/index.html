@@ -12,6 +12,9 @@
          dev opt-in, on localhost when localStorage.ga4_debug === '1'
          (events then show in GA4 DebugView for local QA; toggle with
          localStorage.setItem('ga4_debug','1') / removeItem('ga4_debug')).
+         Admin mute: localStorage.ga4_admin === '1' keeps GA4 silent on
+         ANY host (incl. prod), so the operator can open other users'
+         okumas to debug without polluting funnel/conversion data.
          A window flag guards against accidental double-injection. -->
     <script>
       (function () {
@@ -19,6 +22,14 @@
         window.__ga4_initialized = true;
         window.dataLayer = window.dataLayer || [];
         window.gtag = function () { window.dataLayer.push(arguments); };
+        // Admin mute (any host): toggle in DevTools with
+        //   localStorage.setItem("ga4_admin","1")    // mute this browser
+        //   localStorage.removeItem("ga4_admin")     // unmute
+        // window.gtag stays defined so event calls elsewhere remain safe
+        // no-ops (they just queue into dataLayer, which never flushes).
+        try {
+          if (localStorage.getItem("ga4_admin") === "1") return;
+        } catch (e) {}
         var host = location.hostname;
         var isProd = host === "yildizna.me" || host === "www.yildizna.me";
         var isDebug = false;
