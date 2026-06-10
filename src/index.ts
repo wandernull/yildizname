@@ -5,6 +5,7 @@ import {
   captureViewerIp,
   countPaidReadings,
   getPromo,
+  getPromoCodeByStripeId,
   getReading,
   insertReading,
   insertPromo,
@@ -208,6 +209,26 @@ app.get("/api/reading/:id", async (c) => {
   if (!reading.unlocked) {
     return c.json(base);
   }
+  // Resolve the readable promo code (e.g. "YILDIZ-X3K9") from our promos
+  // table when this reading was paid with a promo. Null for non-promo
+  // purchases or pre-migration-0010 legacy rows. Used by the GA4
+  // `report_unlocked` event's `coupon` parameter on the frontend.
+  const promotionCode = reading.stripePromotionCodeId
+    ? await getPromoCodeByStripeId(c.env.DB, reading.stripePromotionCodeId)
+    : null;
+  // amount_total / amount_discount come from Stripe via the webhook
+  // (migration 0010). For pre-migration paid rows where amount_total
+  // wasn't captured, fall back to the list price 349.99 so GA4 still
+  // gets a sensible value (those rows are also pre-promo, so the discount
+  // fallback of 0 is correct).
+  const amountPaidTry =
+    reading.amountTotalKurus != null
+      ? reading.amountTotalKurus / 100
+      : 349.99;
+  const amountDiscountTry =
+    reading.amountDiscountKurus != null
+      ? reading.amountDiscountKurus / 100
+      : 0;
   return c.json({
     ...base,
     gizliHuylar: sections.gizliHuylar,
@@ -224,6 +245,16 @@ app.get("/api/reading/:id", async (c) => {
     // the frontend (we just don't render the link when missing).
     invoiceHostedUrl: reading.invoiceHostedUrl,
     invoicePdfUrl: reading.invoicePdfUrl,
+    // Stripe Checkout Session id (cs_...) — used as the GA4
+    // `transaction_id` for dedup on the report_unlocked event.
+    stripeSessionId: reading.stripeSessionId,
+    // Real paid amount + promo applied (TRY for client convenience; the
+    // kuruş values stay server-side). amountPaidTry feeds the GA4
+    // `value`; promotionCode feeds `coupon`; amountDiscountTry feeds
+    // `discount`.
+    amountPaidTry,
+    amountDiscountTry,
+    promotionCode,
     // Whether this paid reading already has feedback — the frontend uses
     // it to decide whether to show the feedback sticky CTA (one-shot).
     feedbackGiven: reading.feedbackRating !== null,
@@ -412,6 +443,15 @@ app.post("/api/stripe/webhook", async (c) => {
         invoice?: string | null;
         customer_details?: { email?: string | null } | null;
         customer_email?: string | null;
+        // Revenue + promo data (migration 0010). amount_total is the
+        // post-discount paid amount in kuruş. total_details.amount_discount
+        // is the sum of all discounts. The `discounts` array carries the
+        // Stripe promotion_code id when a promo was applied at Checkout —
+        // both `amount_total` and `discounts` are included in the webhook
+        // payload by default (no `expand` needed).
+        amount_total?: number | null;
+        total_details?: { amount_discount?: number | null } | null;
+        discounts?: Array<{ promotion_code?: string | null }> | null;
       }
     | undefined;
 
@@ -448,12 +488,29 @@ app.post("/api/stripe/webhook", async (c) => {
   const customerEmail =
     session?.customer_details?.email ?? session?.customer_email ?? null;
 
+  // Real paid amount + any promo applied (migration 0010). amount_total
+  // is post-discount; discount can be 0 (no promo used). promotion_code
+  // is the Stripe promo_id ("promo_..."); the readable code (e.g.
+  // "YILDIZ-X3K9") is resolved at /api/reading/:id read time via the
+  // local promos table.
+  const amountTotalKurus =
+    typeof session?.amount_total === "number" ? session.amount_total : null;
+  const amountDiscountKurus =
+    typeof session?.total_details?.amount_discount === "number"
+      ? session.total_details.amount_discount
+      : null;
+  const stripePromotionCodeId =
+    session?.discounts?.[0]?.promotion_code ?? null;
+
   const updated = await markReadingPaid(c.env.DB, readingId, {
     sessionId: session?.id ?? "",
     paymentIntentId: session?.payment_intent ?? null,
     invoiceHostedUrl: invoiceMeta.hostedUrl,
     invoicePdfUrl: invoiceMeta.pdfUrl,
     customerEmail,
+    amountTotalKurus,
+    amountDiscountKurus,
+    stripePromotionCodeId,
   });
 
   if (!updated) {

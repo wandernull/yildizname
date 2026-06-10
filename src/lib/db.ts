@@ -21,6 +21,9 @@ interface ReadingRow {
   invoice_hosted_url: string | null;
   invoice_pdf_url: string | null;
   customer_email: string | null;
+  amount_total_kurus: number | null;
+  amount_discount_kurus: number | null;
+  stripe_promotion_code_id: string | null;
   viewer_ip: string | null;
   client_kind: string | null;
   scrolled_past_free: number;
@@ -40,6 +43,7 @@ const READING_COLUMNS = `
   id, form_data, sections, unlocked, status, error, created_at,
   stripe_session_id, stripe_payment_intent_id, paid_at,
   invoice_hosted_url, invoice_pdf_url, customer_email,
+  amount_total_kurus, amount_discount_kurus, stripe_promotion_code_id,
   viewer_ip, client_kind,
   scrolled_past_free, listened_free, listened_locked,
   listened_chain, clicked_unlock, clicked_unlock_at,
@@ -70,6 +74,9 @@ function rowToReading(row: ReadingRow): Reading {
     invoiceHostedUrl: row.invoice_hosted_url,
     invoicePdfUrl: row.invoice_pdf_url,
     customerEmail: row.customer_email,
+    amountTotalKurus: row.amount_total_kurus,
+    amountDiscountKurus: row.amount_discount_kurus,
+    stripePromotionCodeId: row.stripe_promotion_code_id,
     viewerIp: row.viewer_ip,
     clientKind:
       row.client_kind === "web" ||
@@ -294,6 +301,12 @@ export async function markReadingPaid(
     invoiceHostedUrl: string | null;
     invoicePdfUrl: string | null;
     customerEmail: string | null;
+    // Real Stripe amounts + promo, captured from the webhook (migration
+    // 0010). All nullable so older webhook code paths that don't yet
+    // surface them keep working.
+    amountTotalKurus: number | null;
+    amountDiscountKurus: number | null;
+    stripePromotionCodeId: string | null;
   },
 ): Promise<Reading | null> {
   const existing = await getReading(db, id);
@@ -311,7 +324,10 @@ export async function markReadingPaid(
              paid_at = ?,
              invoice_hosted_url = ?,
              invoice_pdf_url = ?,
-             customer_email = ?
+             customer_email = ?,
+             amount_total_kurus = ?,
+             amount_discount_kurus = ?,
+             stripe_promotion_code_id = ?
        WHERE id = ?`,
     )
     .bind(
@@ -321,10 +337,29 @@ export async function markReadingPaid(
       payment.invoiceHostedUrl,
       payment.invoicePdfUrl,
       payment.customerEmail,
+      payment.amountTotalKurus,
+      payment.amountDiscountKurus,
+      payment.stripePromotionCodeId,
       id,
     )
     .run();
   return getReading(db, id);
+}
+
+// Look up the readable promo code (e.g. "YILDIZ-X3K9") from our `promos`
+// table given the Stripe promotion_code_id captured on a reading. Used by
+// /api/reading/:id to surface the human-friendly code to the client for
+// GA4 attribution. Returns null if not found (e.g. a promo created
+// directly in the Stripe dashboard, outside our admin generator).
+export async function getPromoCodeByStripeId(
+  db: D1Database,
+  stripePromotionCodeId: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare(`SELECT code FROM promos WHERE stripe_promotion_code_id = ? LIMIT 1`)
+    .bind(stripePromotionCodeId)
+    .first<{ code: string }>();
+  return row?.code ?? null;
 }
 
 // Backfill the customer email on an existing reading (admin "Sync email"
@@ -477,6 +512,9 @@ export async function resetPaymentForAdmin(
               paid_at = NULL,
               invoice_hosted_url = NULL,
               invoice_pdf_url = NULL,
+              amount_total_kurus = NULL,
+              amount_discount_kurus = NULL,
+              stripe_promotion_code_id = NULL,
               feedback_rating = NULL,
               feedback_text = NULL,
               feedback_at = NULL,

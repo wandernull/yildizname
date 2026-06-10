@@ -1347,29 +1347,51 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
       // and survives the in-app-browser quirks we worry about elsewhere.
       if (typeof window.gtag === "function") {
         try {
-          if (!isUnlocked) {
-            // Free teaser is about to render — funnel entry point.
-            const k = "ga4_reading_started_" + id;
-            if (!sessionStorage.getItem(k)) {
-              sessionStorage.setItem(k, "1");
-              window.gtag("event", "reading_started");
-            }
-          } else if (paidRedirect && data.stripeSessionId) {
-            // Successful Stripe redirect AND the webhook has flipped the
-            // row to unlocked — the actual conversion moment.
-            // transaction_id is the Stripe Checkout Session id (cs_...)
-            // for GA4 dedup. value is hardcoded to the list price 349.99,
-            // which OVERSTATES revenue for promo-discounted purchases. To
-            // fix accurately, expose session.amount_total on
-            // /api/reading/:id and use it here. (Promo generation shipped
-            // in Phase 2a, so this is a live edge case worth fixing.)
-            const k = "ga4_purchase_" + data.stripeSessionId;
-            if (!sessionStorage.getItem(k)) {
-              sessionStorage.setItem(k, "1");
+          // 1) reading_started — fires on ANY /okuma view (free OR paid),
+          //    deduped per reading per tab. Decoupled from isUnlocked so
+          //    the funnel always has an entry event for every converting
+          //    user, even on edge cases: extensions that wipe
+          //    sessionStorage between the free visit and the Stripe
+          //    redirect; browsers that open Stripe in a new tab
+          //    (sessionStorage is per-tab); init-load races where the
+          //    first fire missed GA4 because the tag hadn't loaded. The
+          //    sessionStorage dedup still keeps it to ONE per reading
+          //    per tab session.
+          const startKey = "ga4_reading_started_" + id;
+          if (!sessionStorage.getItem(startKey)) {
+            sessionStorage.setItem(startKey, "1");
+            window.gtag("event", "reading_started");
+          }
+          // 2) report_unlocked — only on the actual Stripe redirect (the
+          //    conversion moment). transaction_id = Stripe Checkout
+          //    Session id (cs_...) for GA4 dedup. value = real amount
+          //    the customer paid (post-discount, from
+          //    session.amount_total via migration 0010 — accurate even
+          //    when a promo was applied). coupon + discount are GA4's
+          //    standard ecommerce parameters for promo attribution;
+          //    register them as Custom Dimensions/Metrics in GA4 Admin
+          //    so they show up in reports. Falls back gracefully for
+          //    legacy paid rows where amountPaidTry defaults to 349.99
+          //    on the server side.
+          if (paidRedirect && data.stripeSessionId) {
+            // Dedup key mirrors the event name on purpose ("report_unlocked")
+            // so a future reader of sessionStorage can match keys to GA4
+            // events at a glance.
+            const unlockedKey = "ga4_report_unlocked_" + data.stripeSessionId;
+            if (!sessionStorage.getItem(unlockedKey)) {
+              sessionStorage.setItem(unlockedKey, "1");
               window.gtag("event", "report_unlocked", {
                 currency: "TRY",
-                value: 349.99,
+                value:
+                  typeof data.amountPaidTry === "number"
+                    ? data.amountPaidTry
+                    : 349.99,
                 transaction_id: data.stripeSessionId,
+                coupon: data.promotionCode || undefined,
+                discount:
+                  typeof data.amountDiscountTry === "number"
+                    ? data.amountDiscountTry
+                    : 0,
               });
             }
           }

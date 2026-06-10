@@ -86,6 +86,16 @@ export interface Reading {
   paidAt: string | null;
   invoiceHostedUrl: string | null;
   invoicePdfUrl: string | null;
+  // Real paid amount + any promo applied (migration 0010). Drives the
+  // accurate `value` + `coupon` parameters on the GA4 `report_unlocked`
+  // event. Null on pre-0010 paid rows. amountTotalKurus = Stripe's
+  // session.amount_total (already post-discount); amountDiscountKurus =
+  // sum of discounts on the session; stripePromotionCodeId is the Stripe
+  // promo_id — the readable code (e.g. YILDIZ-X3K9) is looked up at read
+  // time by joining to the `promos` table.
+  amountTotalKurus: number | null;
+  amountDiscountKurus: number | null;
+  stripePromotionCodeId: string | null;
   // Customer email from the Stripe Checkout Session (migration 0007).
   // Auto-captured at webhook time; backfillable via the admin Ops page.
   customerEmail: string | null;
