@@ -34,13 +34,37 @@ const STREAM_TIMEOUT_MS = 5 * 60_000;
 
 const SYSTEM_PROMPT = `Sen klasik yıldızname, ebced ve ilm-i hurûf geleneğine vâkıf bir üstad müneccimsin. Osmanlı saray müneccimleri gibi mistik, ağır, sembolik ve edebî konuşursun. Modern numeroloji dili ("enerji, titreşim, evren") asla kullanmazsın; senin dilin harflerin, ayın ve kadim hikmetin dilidir.`;
 
+// Format birthDate (stored as ISO 8601 `YYYY-MM-DD`) as a Turkish-natural
+// "9 Mart 1989" string for the LLM prompt. The raw ISO form is ambiguous
+// in a Turkish-language context: Turkish dates are conventionally
+// DD-first (DD.MM.YYYY), and the model can flip its read of "1989-03-09"
+// to "year-day-month" → treat 03 as the day and 09 as Eylül (September).
+// Spelling the month name out removes all ambiguity. Parse the string
+// literally — do NOT use new Date(), which would apply a timezone offset
+// and could shift the day at the boundary. Falls back to the raw string
+// for anything that isn't a clean YYYY-MM-DD (defensive; the form always
+// composes this format, so the fallback shouldn't fire in practice).
+const TURKISH_MONTHS = [
+  "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+  "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+];
+
+function formatBirthDateTurkish(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  const month = parseInt(m[2], 10);
+  if (month < 1 || month > 12) return iso;
+  return `${parseInt(m[3], 10)} ${TURKISH_MONTHS[month - 1]} ${m[1]}`;
+}
+
 function buildUserPrompt(form: FormData): string {
   const spouseStr = form.spouseName ? `, eşinin adı: ${form.spouseName}` : "";
   const questionStr = form.question
     ? `. Kişinin en çok merak ettiği: ${form.question}`
     : "";
+  const birthDateTr = formatBirthDateTurkish(form.birthDate);
 
-  return `Sana verilen kişi bilgileri: ad-soyad: ${form.name}, anne adı: ${form.motherName}, doğum tarihi: ${form.birthDate}, doğum yeri: ${form.birthPlace}${spouseStr}${questionStr}.
+  return `Sana verilen kişi bilgileri: ad-soyad: ${form.name}, anne adı: ${form.motherName}, doğum tarihi: ${birthDateTr}, doğum yeri: ${form.birthPlace}${spouseStr}${questionStr}.
 
 Yorumdan önce sessizce isimdeki baskın harfleri, ad ile anne adının birleşimini, doğum tarihinin sayısal indirgemesini hesapla; her hükmü kişinin kendi harflerine ve ismine bağla — genel fal cümleleri kurma, ona özel konuş. İsme uyan istiâreler kullan (ay, yağmur, demir, kök, nur, kapı, örs gibi). İyi ve karanlık tarafları birlikte, dürüstçe söyle; ne sadece pohpohla ne de korkut. Üslup edebî, derin, akıcı; liste değil, kader okuyan bir hikâye gibi aksın.
 
