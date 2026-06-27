@@ -911,11 +911,8 @@ function renderFunnelBody(readings: Reading[]): string {
   <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
   <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
   <td class="id">
-    <a href="/okuma/${esc(r.id)}" target="_blank">aç →</a>${
-      r.unlocked
-        ? `<br /><a class="ops-link" href="/admin/ops?id=${esc(r.id)}">işlem →</a>`
-        : ""
-    }
+    <a href="/okuma/${esc(r.id)}" target="_blank">aç →</a><br />
+    <a class="ops-link" href="/admin/ops?id=${esc(r.id)}">işlem →</a>
   </td>
 </tr>`;
     })
