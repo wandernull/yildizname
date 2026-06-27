@@ -31,6 +31,7 @@ import {
 } from "./lib/stripe";
 import {
   buildPromoEmailDefaults,
+  generatePromoEmail,
   plainTextToHtml,
   sendEmail,
 } from "./lib/email";
@@ -870,6 +871,14 @@ function renderAdminShell(
     .ops-dialog input, .ops-dialog textarea { display: block; width: 100%; margin-top: 0.3rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
     .ops-dialog textarea { resize: vertical; line-height: 1.5; }
     .ops-dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.4rem; }
+    .ai-panel { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.85rem 0.85rem; margin: 0 0 1.1rem; background: rgba(201,168,76,0.04); }
+    .ai-panel legend { padding: 0 0.4rem; color: var(--gold); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .ai-panel label { display: block; color: var(--dim); font-size: 0.82rem; margin-bottom: 0.7rem; }
+    .ai-panel textarea.ai-context { resize: vertical; }
+    .ai-feedback-toggle { display: flex !important; align-items: center; gap: 0.45rem; margin-bottom: 0.7rem; }
+    .ai-feedback-toggle input[type="checkbox"] { width: auto; margin: 0; }
+    .ai-actions { display: flex; align-items: center; gap: 0.8rem; }
+    .ai-status { font-size: 0.78rem; color: var(--dim); }
   </style>
 </head>
 <body>
@@ -1032,6 +1041,11 @@ function renderOpsBody(
     promoSent: string | null;
     emailTest: string | null;
     promos: Array<{ promo: Promo; timesRedeemed: number | null }>;
+    // Origin of the current request (e.g. "https://yildizna.me" in prod,
+    // "http://localhost:8787" in local dev). Injected into the default
+    // promo email body so the recipient has a clickable link back to the
+    // site — plainTextToHtml auto-linkifies it at send time.
+    baseUrl: string;
   },
 ): string {
   const {
@@ -1043,6 +1057,7 @@ function renderOpsBody(
     promoSent,
     emailTest,
     promos,
+    baseUrl,
   } = opts;
 
   let notice = "";
@@ -1132,12 +1147,31 @@ function renderOpsBody(
                 code: promo.code,
                 percentOff: promo.percentOff,
                 expiresLabel: exp,
+                baseUrl,
               });
               // promo.id is a UUID (no quotes) so it's safe to interpolate
               // into the element id + inline onclick, like the reset confirm.
+              const hasFeedback = reading.feedbackRating != null;
+              const feedbackLabel = hasFeedback
+                ? `Geri bildirimi de dikkate al (${reading.feedbackRating}★${reading.feedbackText ? " + yorum" : ""})`
+                : "Geri bildirimi de dikkate al (geri bildirim yok)";
               const dialog = `<dialog id="send-${promo.id}" class="ops-dialog">
         <form method="post" action="/api/admin/send-promo/${promo.id}">
           <h3>Promosyon gönder · <code>${esc(promo.code)}</code></h3>
+          <fieldset class="ai-panel">
+            <legend>Yapay zekayla oluştur</legend>
+            <label>Bağlam notları
+              <textarea class="ai-context" rows="3" placeholder="örn: kullanıcı 9 Mart doğumlu ama Eylül yorumu aldı — özür dile + ücretsiz tekrar deneme şansı sun"></textarea>
+            </label>
+            <label class="ai-feedback-toggle">
+              <input type="checkbox" class="ai-use-feedback"${hasFeedback ? "" : " disabled"} />
+              ${esc(feedbackLabel)}
+            </label>
+            <div class="ai-actions">
+              <button type="button" class="ops-btn-ghost ai-gen-btn" onclick="ynGenerateEmail('${promo.id}', this)">Üret →</button>
+              <span class="ai-status"></span>
+            </div>
+          </fieldset>
           <label>Alıcı<input name="to" type="email" value="${esc(reading.customerEmail ?? "")}" placeholder="alıcı e-posta" required /></label>
           <label>Konu<input name="subject" value="${esc(defaults.subject)}" required /></label>
           <label>Mesaj<textarea name="body" rows="12" required>${esc(defaults.bodyText)}</textarea></label>
@@ -1200,11 +1234,49 @@ function renderOpsBody(
     </form>
   </div>`;
 
+  // Shared inline handler for the per-dialog "Yapay zekayla üret" buttons.
+  // POSTs the operator context + includeFeedback flag to
+  // /api/admin/generate-email/:promoId, then fills the dialog's subject +
+  // body fields with the response. Defined once at the page level so
+  // every dialog's inline onclick can call it. Plain JS, no framework —
+  // matches the admin's zero-bundle convention.
+  const aiScript = `<script>
+function ynGenerateEmail(promoId, btn) {
+  var form = btn.closest("form");
+  var panel = btn.closest("fieldset");
+  var status = panel.querySelector(".ai-status");
+  var context = panel.querySelector(".ai-context").value;
+  var includeFeedback = panel.querySelector(".ai-use-feedback").checked;
+  btn.disabled = true;
+  status.textContent = "Üretiliyor…";
+  fetch("/api/admin/generate-email/" + encodeURIComponent(promoId), {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({context: context, includeFeedback: includeFeedback})
+  })
+    .then(function(r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      if (!data.subject || !data.body) throw new Error("eksik içerik");
+      form.querySelector("input[name=subject]").value = data.subject;
+      form.querySelector("textarea[name=body]").value = data.body;
+      status.textContent = "✓ Oluşturuldu — düzenle ve gönder.";
+    })
+    .catch(function(err) {
+      status.textContent = "Hata: " + (err.message || err);
+    })
+    .finally(function() { btn.disabled = false; });
+}
+</script>`;
+
   return `  <p class="meta">Bir okumanın id'sini gir, durumunu gör, gerekiyorsa ödemesini geri al.</p>
   ${notice}
   ${form}
   ${testEmailCard}
-  ${detail}`;
+  ${detail}
+  ${aiScript}`;
 }
 
 app.get("/admin", async (c) => {
@@ -1267,6 +1339,7 @@ app.get("/admin/ops", async (c) => {
         promoSent,
         emailTest,
         promos,
+        baseUrl: new URL(c.req.url).origin,
       }),
     ),
   );
@@ -1439,6 +1512,50 @@ app.post("/api/admin/send-promo/:promoId", async (c) => {
   } catch (err) {
     console.error("[admin] promo email failed", { promoId, to, err });
     return back("0");
+  }
+});
+
+// Generate a personalized promo email via Anthropic Haiku (admin Ops
+// "Yapay zekayla üret" button inside the compose modal). Operator passes
+// free-text context + an opt-in to include the customer's feedback
+// (rating + comment). Returns { subject, body } JSON; the frontend fills
+// the compose form with it. The operator still edits + clicks Gönder.
+app.post("/api/admin/generate-email/:promoId", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const promoId = c.req.param("promoId");
+  const promo = await getPromo(c.env.DB, promoId);
+  if (!promo) return c.json({ error: "promo not found" }, 404);
+  const reading = await getReading(c.env.DB, promo.readingId);
+  if (!reading) return c.json({ error: "reading not found" }, 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    context?: unknown;
+    includeFeedback?: unknown;
+  };
+  const operatorContext = typeof body.context === "string" ? body.context : "";
+  const includeFeedback = body.includeFeedback === true;
+  const exp = promo.expiresAt ? promo.expiresAt.slice(0, 10) : "süresiz";
+
+  try {
+    const result = await generatePromoEmail(c.env, {
+      customerName: reading.formData.name,
+      code: promo.code,
+      percentOff: promo.percentOff,
+      expiresLabel: exp,
+      baseUrl: new URL(c.req.url).origin,
+      operatorContext,
+      feedbackRating: includeFeedback ? reading.feedbackRating : null,
+      feedbackText: includeFeedback ? reading.feedbackText : null,
+    });
+    console.log("[admin] promo email AI-generated", {
+      promoId,
+      includeFeedback,
+      contextChars: operatorContext.trim().length,
+    });
+    return c.json(result);
+  } catch (err) {
+    console.error("[admin] promo email generation failed", { promoId, err });
+    return c.json({ error: "generation failed" }, 500);
   }
 });
 
