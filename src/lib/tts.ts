@@ -187,7 +187,31 @@ export async function synthesizeStream(
     }),
   );
 
-  return clientBranch;
+  // DIAGNOSTIC ONLY (Phase: investigating the "audio cuts off near end on
+  // first-synth listen" report). Counts bytes that actually leave the
+  // Worker toward the client; bufferAndStore logs the matching count for
+  // the R2 branch. If they're equal, the server-side tee is fine and the
+  // browser is ending playback early on the chunked stream (no
+  // Content-Length). If they differ, the client branch is being short-
+  // changed at the Worker boundary and the tee/streaming logic needs to
+  // change. Remove both logs once root-caused.
+  let clientBytes = 0;
+  const counted = clientBranch.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        clientBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      flush() {
+        console.log("[tts] client branch flushed", {
+          readingId,
+          section,
+          clientBytes,
+        });
+      },
+    }),
+  );
+  return counted;
 }
 
 async function bufferAndStore(
@@ -224,5 +248,14 @@ async function bufferAndStore(
       synthesizedAt: new Date().toISOString(),
       bytes: String(total),
     },
+  });
+  // DIAGNOSTIC ONLY — pair this with the "client branch flushed" log
+  // emitted in synthesizeStream. Equal totals → server is fine, browser
+  // ends playback early; unequal → client branch short-changed at the
+  // Worker boundary. Remove once root-caused.
+  console.log("[tts] r2 branch buffered", {
+    readingId,
+    section,
+    r2Bytes: total,
   });
 }
