@@ -111,6 +111,48 @@ ${paragraphs}
 </div>`;
 }
 
+// "Yıldıznamen hazır" — the email sent when the queue consumer finishes
+// a generation AND the row has a customer_email on it (typed at the
+// loading-screen escape hatch). This is the payoff of the async refactor:
+// the user can bounce mid-generation and still hear back. Brand voice is
+// Ottoman müneccim — same register as the reading itself, no SaaS
+// "your order is ready" copy. plainTextToHtml() auto-linkifies the URL
+// into a gold underlined <a>, matching the promo emails.
+export interface SendReadingReadyEmailArgs {
+  to: string;
+  name: string;        // greeting personalization; "" → "Merhaba,"
+  readingId: string;
+  baseUrl: string;     // "https://yildizna.me" or "http://localhost:8787"
+}
+
+export async function sendReadingReadyEmail(
+  env: Env,
+  args: SendReadingReadyEmailArgs,
+): Promise<void> {
+  const greeting = args.name.trim()
+    ? `Merhaba ${args.name.trim()},`
+    : "Merhaba,";
+  const readingUrl = `${args.baseUrl}/okuma/${encodeURIComponent(args.readingId)}`;
+  const bodyText = [
+    greeting,
+    "",
+    "Yıldıznamen yazıldı. Harflerin, sayıların ve ayın hükmü sana özel bir kader okuması olarak hazır:",
+    "",
+    readingUrl,
+    "",
+    "Bağlantıyı saklayabilir, istediğin zaman dönüp okuyabilirsin.",
+    "",
+    "Sevgiyle,",
+    "Yıldızname",
+  ].join("\n");
+  await sendEmail(env, {
+    to: args.to,
+    subject: "Yıldıznamen hazır",
+    html: plainTextToHtml(bodyText),
+    text: bodyText,
+  });
+}
+
 // AI-generated promo email via Anthropic Haiku 4.5. Backs the
 // "Yapay zekayla üret" button in the Ops compose modal: operator types
 // short context notes (e.g. "user born 9 March got a September reading")

@@ -32,6 +32,19 @@ export function fetchReading(id) {
   return jsonRequest(`/api/reading/${encodeURIComponent(id)}`);
 }
 
+// Attach a customer email to a still-generating (or already-done) reading.
+// Backs the loading-screen "hazır olunca yaz" escape hatch — lets users
+// who don't want to wait leave an address and bounce safely. Hits the
+// /api/reading/:id/email route which (server-side) calls setCustomerEmail
+// and, if the row is already status=done, fires the "hazır" email
+// immediately to cover the post-completion race.
+export function attachEmail(readingId, email) {
+  return jsonRequest(`/api/reading/${encodeURIComponent(readingId)}/email`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
 // Creates a Stripe Checkout Session server-side and returns the hosted
 // Checkout URL. The caller is responsible for redirecting the browser
 // to that URL. If the reading is already paid, the server returns

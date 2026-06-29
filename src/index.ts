@@ -7,13 +7,15 @@ import {
   getPromo,
   getPromoCodeByStripeId,
   getReading,
-  insertReading,
   insertPromo,
+  insertReadingPending,
   listPromosForReading,
   listReadingsForAdmin,
   listReadingsWithFeedback,
   markEvent,
   markPromoSent,
+  markReadingDone,
+  markReadingFailed,
   markReadingPaid,
   resetPaymentForAdmin,
   setCustomerEmail,
@@ -34,6 +36,7 @@ import {
   generatePromoEmail,
   plainTextToHtml,
   sendEmail,
+  sendReadingReadyEmail,
 } from "./lib/email";
 import { getKarakterinOzuTeaser, splitKarakterinOzu } from "./lib/text";
 import {
@@ -48,6 +51,7 @@ import {
   TRACK_EVENTS,
   type Env,
   type FormData,
+  type GenerateJob,
   type Promo,
   type Reading,
   type TrackEvent,
@@ -112,14 +116,14 @@ function isValidForm(body: unknown): body is FormData {
 
 // ----- API ------------------------------------------------------------------
 
-// /api/generate is synchronous on purpose. Workers Free can't reliably run a
-// 2–3 minute background task (waitUntil gets cancelled and there's a 100s
-// subrequest cap on non-streaming fetch). Instead we keep the client
-// connected for the duration: llm.ts uses Anthropic's SSE streaming API so
-// headers come back in <1s (subrequest timeout never fires) and the Worker
-// holds the inbound HTTP connection open while it consumes the stream and
-// writes the finished row to D1.
-
+// /api/generate is the PRODUCER side of the async refactor. It validates
+// the form, inserts a placeholder row with status='pending', enqueues a
+// {readingId} job on GENERATION_QUEUE, and returns {id, status:'pending'}
+// in ~100ms. The actual ~2-minute Anthropic call runs in the consumer
+// (the queue() handler at the bottom of this file), independent of the
+// inbound client connection — so mobile tab/app switches and in-app
+// browser kills no longer abort the generation. The frontend polls
+// /api/reading/:id until status flips to 'done' (or 'error').
 app.post("/api/generate", async (c) => {
   let body: unknown;
   try {
@@ -133,25 +137,22 @@ app.post("/api/generate", async (c) => {
   const form = body satisfies FormData;
   const id = crypto.randomUUID();
   try {
-    const sections = await generateYildizname(form, c.env.ANTHROPIC_API_KEY);
-    await insertReading(c.env.DB, { id, formData: form, sections, unlocked: false });
-    // freeSection in the generate response is the preview-portion only;
-    // mirrors what /api/reading/:id returns for the free state. The current
-    // frontend doesn't actually read this field (it re-fetches via /api/
-    // reading/:id once it navigates to /okuma/:id), but trimming it here
-    // keeps the boundary clean if a future caller ever does consume it.
-    return c.json({
-      id,
-      status: "done",
-      freeSection: splitKarakterinOzu(sections.karakterinOzu).preview,
-      kapakSozu: sections.kapakSozu,
+    await insertReadingPending(c.env.DB, { id, formData: form });
+    // baseUrl captured at enqueue time so the consumer can use it in
+    // the "hazır" email link (the consumer has no inbound request to
+    // pull origin from). Matches whatever host this producer was hit
+    // on — yildizna.me in prod, localhost:8787 in local dev.
+    await c.env.GENERATION_QUEUE.send({
+      readingId: id,
+      baseUrl: new URL(c.req.url).origin,
     });
+    return c.json({ id, status: "pending" });
   } catch (err) {
     const msg =
       err instanceof Error
         ? err.message
-        : "Yıldızlar şu an okunamıyor, sonra tekrar deneyin.";
-    console.error("[generate] failed", { id, error: msg });
+        : "Yıldızname şu an başlatılamadı, sonra tekrar deneyin.";
+    console.error("[generate] producer failed", { id, error: msg });
     return c.json({ error: msg, status: "error" }, 500);
   }
 });
@@ -183,8 +184,27 @@ app.get("/api/reading/:id", async (c) => {
       }),
     );
   }
+  // Async producer/consumer flow: a 'pending' row has no sections yet
+  // (the consumer hasn't run, or is still mid-flight); an 'error' row
+  // has a recorded failure. Short-circuit both so the frontend polling
+  // can branch on `status` without needing to defensively read sections.
+  // The full response shape below only renders once status='done'.
+  // hasEmail is exposed (as a boolean flag — no PII) so the loading-
+  // screen escape hatch can render in its "confirmed" state when the
+  // user is opening a link they (or someone with the link) already
+  // attached an email to.
+  if (reading.status !== "done") {
+    return c.json({
+      id: reading.id,
+      status: reading.status,
+      error: reading.error,
+      hasEmail: reading.customerEmail != null,
+    });
+  }
   const sections = reading.sections;
   if (!sections) {
+    // Defensive: status='done' but sections is still empty would be a
+    // consumer bug. Treat as error for the client.
     return c.json({ error: "Okuma boş döndü." }, 500);
   }
   // karakterinOzu is the "free preview" section. Before unlock the client
@@ -200,6 +220,15 @@ app.get("/api/reading/:id", async (c) => {
 
   const base = {
     id: reading.id,
+    // Mirror the pending/error short-circuit above — having `status` on
+    // every response shape means the frontend poll helper can use a
+    // single `data.status === "done"` check to exit the loop without
+    // having to sniff for the presence of section fields. hasEmail is
+    // also included on the done shape so any code path that re-renders
+    // the escape hatch (currently not used here, but cheap to expose)
+    // can pick up the confirmed state.
+    status: "done" as const,
+    hasEmail: reading.customerEmail != null,
     unlocked: reading.unlocked,
     kapakSozu: sections.kapakSozu,
     karakterinOzu: karakterinOzuForClient,
@@ -260,6 +289,58 @@ app.get("/api/reading/:id", async (c) => {
     // it to decide whether to show the feedback sticky CTA (one-shot).
     feedbackGiven: reading.feedbackRating !== null,
   });
+});
+
+// POST /api/reading/:id/email — attach an email to a reading from the
+// loading-screen escape hatch. Persists via setCustomerEmail (same
+// column the Stripe webhook + admin sync use, since this is the same
+// person's email — they typed it on the loading page for the same
+// reading). If the consumer has already finished generating by the time
+// the user submits (race: user typed slowly), fire the "hazır" email
+// now — otherwise the consumer fires it post-markReadingDone. Both
+// paths converge on a single notification per email.
+app.post("/api/reading/:id/email", async (c) => {
+  const id = c.req.param("id");
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Geçersiz istek." }, 400);
+  }
+  const raw = (body as { email?: unknown })?.email;
+  const email = typeof raw === "string" ? raw.trim() : "";
+  if (!email.includes("@") || email.length > 200) {
+    return c.json({ error: "Geçerli bir e-posta yaz." }, 400);
+  }
+  const reading = await getReading(c.env.DB, id);
+  if (!reading) {
+    return c.json({ error: "Okuma bulunamadı." }, 404);
+  }
+  await setCustomerEmail(c.env.DB, id, email);
+  // Race-handler: consumer already finished. Fire the email now so the
+  // user still gets notified. Errors are logged but don't fail the
+  // request — the email is persisted; if the user comes back via the
+  // copy-link path they'll see their reading anyway.
+  if (reading.status === "done") {
+    try {
+      await sendReadingReadyEmail(c.env, {
+        to: email,
+        name: reading.formData.name,
+        readingId: id,
+        baseUrl: new URL(c.req.url).origin,
+      });
+      console.log("[reading-email] hazır sent retroactively", {
+        id,
+        to: email,
+      });
+    } catch (err) {
+      console.error("[reading-email] hazır send failed", {
+        id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return c.json({ ok: true });
 });
 
 // POST /api/track/:id — funnel analytics. The frontend fires this on
@@ -378,7 +459,16 @@ app.post("/api/unlock", async (c) => {
     // in Turkish. The Checkout `locale` param controls the payment page
     // UI only; invoice locale is driven by the Customer's preferred_locales.
     // One extra Stripe API call per unlock attempt — cheap and fast.
-    const customer = await createStripeCustomer(c.env, { readingId: id });
+    // If we already have an email from the loading-screen escape hatch
+    // (or any prior write to customer_email), seed it on the Customer.
+    // Stripe Checkout pre-fills the email field; it'll be locked
+    // read-only by Stripe's design — that's intentional UX here, since
+    // a user who typed an address ~2 minutes ago is overwhelmingly
+    // going to use the same one. Pre-fill > re-typing.
+    const customer = await createStripeCustomer(c.env, {
+      readingId: id,
+      email: existing.customerEmail,
+    });
     const session = await createCheckoutSession(c.env, {
       readingId: id,
       origin,
@@ -1569,4 +1659,94 @@ app.notFound(async (c) => {
   return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
 });
 
-export default app;
+// Worker entry. Hono handles fetch; the queue() handler runs the actual
+// Anthropic generation in the background for jobs enqueued by
+// /api/generate. Decoupled this way, a 2-minute LLM stream is no longer
+// tethered to the inbound client connection — the user can close the
+// tab, switch apps, lock their phone, and the reading still completes.
+// Phase 5 will fire a "hazır" email at the end if the user left one on
+// the loading screen.
+const QUEUE_MAX_ATTEMPTS = 3; // mirrors wrangler.toml max_retries
+
+export default {
+  fetch: app.fetch,
+  async queue(batch: MessageBatch<GenerateJob>, env: Env): Promise<void> {
+    for (const msg of batch.messages) {
+      const { readingId } = msg.body;
+      try {
+        const reading = await getReading(env.DB, readingId);
+        if (!reading) {
+          // Row was deleted (e.g. reset by admin) between enqueue and
+          // dispatch — nothing to do, don't retry.
+          console.warn("[queue] reading not found, ack'ing", { readingId });
+          msg.ack();
+          continue;
+        }
+        if (reading.status === "done") {
+          // Idempotency: a redelivery of an already-completed job.
+          console.log("[queue] already done, ack'ing redelivery", {
+            readingId,
+            attempt: msg.attempts,
+          });
+          msg.ack();
+          continue;
+        }
+        const sections = await generateYildizname(
+          reading.formData,
+          env.ANTHROPIC_API_KEY,
+        );
+        await markReadingDone(env.DB, readingId, sections);
+        // If the user left an email on the loading-screen escape hatch
+        // (or any prior write to customer_email — e.g. from a previous
+        // Stripe checkout on the same id), send the "hazır" email NOW.
+        // Wrapped in its own try/catch: generation succeeded, the row
+        // is committed, an email failure shouldn't poison the queue
+        // attempt (which would trigger a retry that re-runs the LLM).
+        const updated = await getReading(env.DB, readingId);
+        if (updated?.customerEmail) {
+          try {
+            await sendReadingReadyEmail(env, {
+              to: updated.customerEmail,
+              name: updated.formData.name,
+              readingId,
+              baseUrl: msg.body.baseUrl,
+            });
+            console.log("[queue] hazır email sent", {
+              readingId,
+              to: updated.customerEmail,
+            });
+          } catch (mailErr) {
+            console.error("[queue] hazır email failed", {
+              readingId,
+              err: mailErr instanceof Error ? mailErr.message : String(mailErr),
+            });
+          }
+        }
+        console.log("[queue] generation done", {
+          readingId,
+          attempt: msg.attempts,
+        });
+        msg.ack();
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error("[queue] generation failed", {
+          readingId,
+          attempt: msg.attempts,
+          err: errMsg,
+        });
+        // Only persist the failure on the FINAL retry attempt — earlier
+        // attempts keep the row in 'pending' so the frontend doesn't
+        // briefly flash an error state during a transient blip.
+        if (msg.attempts >= QUEUE_MAX_ATTEMPTS) {
+          await markReadingFailed(env.DB, readingId, errMsg).catch((dbErr) => {
+            console.error("[queue] markReadingFailed failed", {
+              readingId,
+              dbErr,
+            });
+          });
+        }
+        msg.retry();
+      }
+    }
+  },
+};

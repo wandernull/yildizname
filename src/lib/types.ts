@@ -166,4 +166,24 @@ export interface Env {
   // through Cloudflare Email Routing to the real inbox (a support@ alias
   // also routes there silently, but destek@ is the only public address).
   RESEND_API_KEY: string;
+  // Background generation queue (Workers Paid). Producer side of the
+  // async refactor: /api/generate enqueues a {readingId} and returns
+  // immediately; the Worker's queue() handler picks it up and runs the
+  // ~2-min Anthropic call independently of any client connection. See
+  // wrangler.toml [[queues.producers]] / [[queues.consumers]] for the
+  // binding + retry config; miniflare simulates the queue locally.
+  GENERATION_QUEUE: Queue<GenerateJob>;
+}
+
+// Payload for the GENERATION_QUEUE. The reading id is the canonical
+// pointer (form data + status all live in D1, so a re-delivery is
+// idempotent — the consumer rechecks status before doing work). The
+// baseUrl is captured at enqueue time so the consumer can put a real
+// link in the "hazır" email; the consumer has no inbound request, so
+// it can't compute `new URL(c.req.url).origin` itself. Origin matches
+// whatever host the producer was hit on: `https://yildizna.me` in prod,
+// `http://localhost:8787` in local dev.
+export interface GenerateJob {
+  readingId: string;
+  baseUrl: string;
 }

@@ -524,38 +524,205 @@ function startHarfler(host) {
   };
 }
 
-export function renderLoading(router) {
-  const root = tpl("tpl-loading");
-  const primaryEl = root.querySelector(".loading-primary");
-  const secondaryEl = root.querySelector(".loading-secondary");
-  const constellationHost = root.querySelector(".constellation-host");
-  const harflerHost = root.querySelector(".harfler-host");
+// Poll /api/reading/:id every ~3s until status is terminal (done or
+// error) — or the soft cap is reached (~4 minutes, comfortably longer
+// than a normal generation). Returns the final reading payload, or
+// null if the poll loop was cancelled or timed out. `isCancelled` lets
+// the caller (e.g. renderLoading on view-cleanup) bail when the user
+// navigates away mid-poll.
+async function pollReadingUntilTerminal(id, isCancelled) {
+  const INTERVAL_MS = 3000;
+  const MAX_ATTEMPTS = 80; // 80 × 3s = 240s
+  for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
+    if (isCancelled()) return null;
+    const data = await api.fetchReading(id).catch(() => null);
+    if (isCancelled()) return null;
+    if (data && (data.status === "done" || data.status === "error")) {
+      return data;
+    }
+    await new Promise((r) => window.setTimeout(r, INTERVAL_MS));
+  }
+  return null;
+}
 
-  let cancelled = false;
-  let navTimer = 0;
+// Copy a string to the clipboard with a non-secure-context fallback.
+// navigator.clipboard.writeText only works in secure contexts (HTTPS,
+// localhost, 127.0.0.1) — on 0.0.0.0 or any IP/lan host it rejects.
+// The execCommand fallback works in basically any browser including
+// non-secure contexts; deprecated but still universally supported and
+// the only option for this case until we deploy.
+async function copyToClipboard(text) {
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to legacy path */
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "0";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
+// The "Beklemek zorunda değilsin" escape-hatch panel surfaced under the
+// loading animation. Two recovery paths for the user:
+//   1. Type an email — server attaches it to the row; if the row is
+//      already done by then, /api/reading/:id/email fires the "hazır"
+//      email immediately (Phase 5 wiring).
+//   2. Copy the okuma URL — they can close the tab and return later
+//      to whatever state the reading is in.
+// Both paths defeat the "user bounces on mobile and loses everything"
+// failure mode that motivated the entire async refactor.
+function buildEscapeHatch(readingId, isCancelled, initialHasEmail) {
+  const panel = document.createElement("div");
+  panel.className = "loading-escape";
+  // Static structure: intro line + email slot (form OR confirmed text)
+  // + copy-link button + transient status line. The email slot's
+  // contents swap between "ask" and "confirmed" based on state — the
+  // copy-link and status survive across both, so the user can still
+  // copy regardless of email state.
+  panel.innerHTML = `
+    <p class="loading-escape-label"></p>
+    <div class="loading-escape-email-slot"></div>
+    <button type="button" class="loading-escape-copy">↗ Bağlantını kopyala ve sonra kontrol et</button>
+    <p class="loading-escape-status" aria-live="polite"></p>
+  `;
+  const labelEl = panel.querySelector(".loading-escape-label");
+  const slotEl = panel.querySelector(".loading-escape-email-slot");
+  const statusEl = panel.querySelector(".loading-escape-status");
+  const setStatus = (msg, tone = "") => {
+    if (isCancelled()) return;
+    statusEl.textContent = msg;
+    statusEl.dataset.tone = tone;
+  };
+
+  const renderAsk = () => {
+    labelEl.textContent =
+      "Eski usul saatler isterdi; bu okuma 2-3 dakika sürer. Beklemek istemezsen:";
+    slotEl.innerHTML = `
+      <form class="loading-escape-email" novalidate>
+        <input type="email" placeholder="e-posta" autocomplete="email" required />
+        <button type="submit" class="loading-escape-btn">Hazır olunca yaz</button>
+      </form>
+    `;
+    slotEl
+      .querySelector(".loading-escape-email")
+      .addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const input = slotEl.querySelector("input[type=email]");
+        const btn = slotEl.querySelector(".loading-escape-btn");
+        const email = input.value.trim();
+        if (!email || !email.includes("@")) {
+          setStatus("Geçerli bir e-posta yaz.", "warn");
+          return;
+        }
+        btn.disabled = true;
+        setStatus("Kaydediliyor…");
+        try {
+          await api.attachEmail(readingId, email);
+          if (isCancelled()) return;
+          renderConfirmed();
+          setStatus("", "");
+        } catch (err) {
+          setStatus("Kaydedilemedi — sonra tekrar dene.", "warn");
+          btn.disabled = false;
+        }
+      });
+  };
+
+  const renderConfirmed = () => {
+    // Tighter intro when there's already a confirmed email — the
+    // "beklemek istemezsen:" preamble doesn't lead anywhere now that
+    // the form is gone, so we drop the "veya bekle" framing.
+    labelEl.textContent =
+      "Eski usul saatler isterdi; bu okuma 2-3 dakika sürer.";
+    slotEl.innerHTML = `<p class="loading-escape-confirmed">✓ E-postanı aldım — yıldıznamen hazır olduğunda sana yazarım.</p>`;
+  };
+
+  if (initialHasEmail) renderConfirmed();
+  else renderAsk();
+
+  panel
+    .querySelector(".loading-escape-copy")
+    .addEventListener("click", async () => {
+      const url = `${window.location.origin}/okuma/${encodeURIComponent(readingId)}`;
+      const ok = await copyToClipboard(url);
+      if (ok) {
+        setStatus("✓ Bağlantı kopyalandı — istediğin zaman geri dön.", "ok");
+      } else {
+        // Last resort: still surface the URL so the user can long-press
+        // and copy by hand. Hits on locked-down in-app browsers.
+        setStatus("Kopyalanamadı, elle kopyala: " + url, "warn");
+      }
+    });
+
+  return panel;
+}
+
+// The shared mystical-loading experience. Mounts the full tpl-loading
+// visual (moon, constellation parade, harfler, phased text rotation,
+// reassurance footnote) + the escape-hatch panel + polling, as a fixed
+// full-viewport overlay on top of `parentEl`. Used by:
+//   - renderLoading        — first-time form-submit ritual
+//   - renderResult pending — bounce-recovery on /okuma/:id when the row
+//                            is still being generated
+//   so the visual experience is identical regardless of how the user
+//   arrived. Returns { cleanup } so the caller can tear it all down
+//   (used both on view-unmount and on natural completion).
+//
+// Callbacks:
+//   onDone(data)   — terminal status='done'; data is the full reading
+//   onError(msg)   — terminal status='error', or poll timeout (~4 min)
+function mountLoadingExperience(parentEl, opts) {
+  const { readingId, isCancelled, hasEmail, onDone, onError } = opts;
+  const tplNode = tpl("tpl-loading");
+  const overlay = document.createElement("div");
+  overlay.className = "loading-overlay-fixed";
+  overlay.appendChild(tplNode);
+
+  const primaryEl = overlay.querySelector(".loading-primary");
+  const secondaryEl = overlay.querySelector(".loading-secondary");
+  const constellationHost = overlay.querySelector(".constellation-host");
+  const harflerHost = overlay.querySelector(".harfler-host");
+
+  let stopped = false;
   const startedAt = Date.now();
 
-  // Start everything that isn't text rotation immediately — the moon
-  // animation is pure CSS, the constellation parade and harfler each
-  // self-schedule.
+  // Constellation parade + harfler — ambient self-scheduling animations.
   const stopConstellations = startConstellationParade(constellationHost);
   const stopHarfler = startHarfler(harflerHost);
 
-  // Phased text. Initial render is immediate (no fade); subsequent rotations
-  // fade out → swap → fade in. Each phase has 3 primary + 3 secondary lines
-  // that cycle within the phase every ~4.5s.
+  // Phased text. Initial render is immediate (no fade); subsequent
+  // rotations fade out → swap → fade in. Each phase has 3 primary + 3
+  // secondary lines that cycle within the phase every ~4.5s.
   let phaseIdx = 0;
   let lineIdx = 0;
   const swap = (el, text) => {
     el.style.opacity = "0";
     window.setTimeout(() => {
-      if (cancelled) return;
+      if (stopped) return;
       el.textContent = text;
       el.style.opacity = "1";
     }, 280);
   };
   const rotate = () => {
-    if (cancelled) return;
+    if (stopped) return;
     const elapsedSec = (Date.now() - startedAt) / 1000;
     const newPhaseIdx = pickPhase(elapsedSec);
     if (newPhaseIdx !== phaseIdx) {
@@ -568,37 +735,87 @@ export function renderLoading(router) {
     swap(primaryEl, phase.primary[lineIdx % phase.primary.length]);
     swap(secondaryEl, phase.secondary[lineIdx % phase.secondary.length]);
   };
-  // Render phase 0 / line 0 immediately, no fade.
   primaryEl.textContent = LOADING_PHASES[0].primary[0];
   secondaryEl.textContent = LOADING_PHASES[0].secondary[0];
   primaryEl.style.opacity = "1";
   secondaryEl.style.opacity = "1";
   const textTimer = window.setInterval(rotate, 4500);
 
+  overlay.appendChild(
+    buildEscapeHatch(readingId, () => stopped || isCancelled(), hasEmail),
+  );
+  parentEl.appendChild(overlay);
+
   const cleanup = () => {
-    cancelled = true;
+    if (stopped) return;
+    stopped = true;
     window.clearInterval(textTimer);
-    if (navTimer) window.clearTimeout(navTimer);
     stopConstellations();
     stopHarfler();
+    overlay.remove();
+  };
+
+  // Polling — runs concurrently with the animation timers above. The
+  // poll helper takes `isCancelled`; we pass a guard that combines the
+  // overlay-stopped flag with the caller's signal.
+  (async () => {
+    const final = await pollReadingUntilTerminal(
+      readingId,
+      () => stopped || isCancelled(),
+    );
+    if (stopped || isCancelled()) return;
+    if (!final) {
+      onError("Yıldızlar fazla yavaş hizalanıyor — sayfayı yenile.");
+      return;
+    }
+    if (final.status === "error") {
+      onError(final.error || "Yıldızlar bugün karanlık. Sonra tekrar dene.");
+      return;
+    }
+    onDone(final);
+  })();
+
+  return { cleanup };
+}
+
+export function renderLoading(router) {
+  // Thin shell — the actual mystical loading view is mounted by
+  // mountLoadingExperience below. This view exists for ~100ms (until
+  // /api/generate returns the id and we hand off to the shared helper),
+  // then the shell stays as the host element under the fixed overlay.
+  const root = document.createElement("div");
+  root.className = "view view-loading-shell";
+
+  let cancelled = false;
+  let navTimer = 0;
+  let loadingHandle = null;
+
+  const cleanup = () => {
+    cancelled = true;
+    if (navTimer) window.clearTimeout(navTimer);
+    if (loadingHandle) loadingHandle.cleanup();
   };
   root.addEventListener("view:cleanup", cleanup);
 
+  // Error UI is shared between "couldn't enqueue" and "generation
+  // failed" paths. Mounts a centred message + a "Tekrar dene" button
+  // that sends the user back to the form.
   const showError = (message) => {
-    cleanup();
-    primaryEl.textContent = message || "Yıldızlar şu an okunamıyor.";
-    primaryEl.style.opacity = "1";
-    primaryEl.classList.remove("shimmer-gold");
-    secondaryEl.textContent = "";
+    if (cancelled) return;
+    if (loadingHandle) loadingHandle.cleanup();
+    root.innerHTML = "";
+    const card = document.createElement("div");
+    card.className = "loading-error-card";
+    const msg = document.createElement("p");
+    msg.className = "loading-error-msg";
+    msg.textContent = message || "Yıldızlar şu an okunamıyor.";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-gold-outline";
-    btn.style.marginTop = "2rem";
     btn.textContent = "Tekrar dene";
-    btn.addEventListener("click", () =>
-      router.setStep("form"),
-    );
-    root.appendChild(btn);
+    btn.addEventListener("click", () => router.setStep("form"));
+    card.append(msg, btn);
+    root.appendChild(card);
   };
 
   const submit = async () => {
@@ -613,27 +830,58 @@ export function renderLoading(router) {
       router.setStep("form");
       return;
     }
-    const startedAt = Date.now();
+    const submitStartedAt = Date.now();
     try {
-      const data = await api.generateReading(form);
+      // Producer call — fast (~100ms). Returns {id, status:"pending"};
+      // the real LLM work runs in the queue consumer, decoupled from
+      // this request's lifetime. From here on the user can bounce, lock
+      // the phone, switch apps — generation still completes.
+      const initial = await api.generateReading(form);
       if (cancelled) return;
-      if (!data.id) throw new Error(data.error || "Müneccim sustu.");
-      const elapsed = Date.now() - startedAt;
-      const wait = Math.max(0, MIN_LOADING_MS - elapsed);
-      navTimer = window.setTimeout(() => {
-        if (cancelled) return;
-        try {
-          window.sessionStorage.removeItem(FORM_SESSION_KEY);
-          // Mark the upcoming /result render as "user came through the
-          // ritual" so it can autoplay karakterinOzu.
-          window.sessionStorage.setItem(JOURNEY_FLAG, "1");
-        } catch {
-          /* ignore */
-        }
-        router.navigate(`/okuma/${encodeURIComponent(data.id)}`, {
-          replace: true,
-        });
-      }, wait);
+      if (!initial.id) {
+        throw new Error(initial.error || "Müneccim sustu.");
+      }
+      const readingId = initial.id;
+      // URL bar reflects the real okuma URL while the wait continues —
+      // share, refresh, address-bar copy all work; refresh lands on
+      // renderResult which itself mounts the same loading experience.
+      try {
+        window.history.replaceState(
+          {},
+          "",
+          `/okuma/${encodeURIComponent(readingId)}`,
+        );
+      } catch {
+        /* ignore */
+      }
+      loadingHandle = mountLoadingExperience(root, {
+        readingId,
+        isCancelled: () => cancelled,
+        // Just-created row: customer_email is null on the server, so
+        // start the escape hatch in its "ask" state.
+        hasEmail: false,
+        onDone: () => {
+          if (cancelled) return;
+          // Give the animation a beat of dignity for instant-complete
+          // edge cases (e.g. the consumer already finished a duplicate
+          // retry mid-flight).
+          const elapsed = Date.now() - submitStartedAt;
+          const wait = Math.max(0, MIN_LOADING_MS - elapsed);
+          navTimer = window.setTimeout(() => {
+            if (cancelled) return;
+            try {
+              window.sessionStorage.removeItem(FORM_SESSION_KEY);
+              window.sessionStorage.setItem(JOURNEY_FLAG, "1");
+            } catch {
+              /* ignore */
+            }
+            router.navigate(`/okuma/${encodeURIComponent(readingId)}`, {
+              replace: true,
+            });
+          }, wait);
+        },
+        onError: showError,
+      });
     } catch (err) {
       showError(err.message);
     }
@@ -1262,9 +1510,16 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
   // initial placeholder while we fetch
   kapakSozuEl.textContent = paidRedirect ? "Mühür kırılıyor…" : "Okuma açılıyor…";
 
+  // `cancelled` is checked by the bounce-recovery poll loop below so it
+  // bails when the user navigates away mid-poll. Set via the disposables
+  // pipeline so cleanup goes through the same path as everything else.
+  let cancelled = false;
   // Track every disposable (per-section audio + the chain-play audio) so we
   // can stop them all if the user navigates away.
   const disposables = [];
+  disposables.push(() => {
+    cancelled = true;
+  });
   const chainAudio = new Audio();
   chainAudio.preload = "none";
   disposables.push(() => {
@@ -1317,7 +1572,60 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
 
   (async () => {
     try {
-      const data = await fetchReadingMaybePolling(id, paidRedirect);
+      let data = await fetchReadingMaybePolling(id, paidRedirect);
+
+      // Bounce-recovery: user navigated to /okuma/:id while the
+      // background generation is still running — e.g. they copied the
+      // link from the loading-screen escape hatch, refreshed, or shared
+      // the link. Mount the same mystical loading experience the form
+      // flow uses (moon + constellations + phased text + escape hatch),
+      // not a generic spinner — so the experience feels consistent
+      // regardless of how they arrived at this page.
+      if (data.status === "pending") {
+        if (actionBar) actionBar.style.display = "none";
+        kapakSozuEl.textContent = "";
+        let loadingHandle = null;
+        const finalData = await new Promise((resolve) => {
+          loadingHandle = mountLoadingExperience(root, {
+            readingId: id,
+            isCancelled: () => cancelled,
+            // hasEmail comes from the initial fetch — if the user (or
+            // someone they shared the link with) already attached an
+            // email, the escape hatch opens in its "confirmed" state
+            // instead of asking again.
+            hasEmail: Boolean(data.hasEmail),
+            onDone: (final) => resolve(final),
+            onError: (msg) => resolve({ status: "error", error: msg }),
+          });
+        });
+        if (cancelled) return;
+        if (finalData.status === "error") {
+          if (loadingHandle) loadingHandle.cleanup();
+          kapakSozuEl.textContent =
+            finalData.error || "Yıldızlar bugün karanlık. Sonra tekrar dene.";
+          return;
+        }
+        data = finalData;
+        // Keep the loading overlay mounted while we render the result
+        // content underneath, then tear it down so the reading is
+        // revealed in one motion instead of flashing through "empty
+        // result page".
+        disposables.push(() => loadingHandle && loadingHandle.cleanup());
+        if (actionBar) actionBar.style.display = "";
+        // Defer the actual unmount to after the result content has been
+        // populated below (kapakSozu, sections, etc.). Using a microtask
+        // here gives the synchronous renders below a chance to run
+        // first.
+        Promise.resolve().then(() => {
+          if (loadingHandle) loadingHandle.cleanup();
+        });
+      }
+      if (data.status === "error") {
+        kapakSozuEl.textContent =
+          data.error || "Yıldızlar bugün karanlık. Sonra tekrar dene.";
+        if (actionBar) actionBar.style.display = "none";
+        return;
+      }
       const isUnlocked = Boolean(data.unlocked || unlockedQuery === "true");
 
       // Clean up the ?paid=1 from the URL so refreshing the page doesn't

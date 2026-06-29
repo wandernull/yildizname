@@ -895,36 +895,171 @@ h4 {
   transition: opacity 0.5s ease;
 }
 
-/* Reassurance footnote — persistent, deliberately muted. Sets the 2-3 min
-   expectation without competing with the phased text. The thin gold hairline
-   above marks it visually as "metadata / footnote" territory. */
-.loading-reassurance {
-  position: relative;
+/* The reassurance text ("Eski usul saatler isterdi; bu okuma 2-3 dakika
+   sürer…") that used to live as a standalone .loading-reassurance footnote
+   under the phased text now lives inside the floating escape-hatch panel
+   as its intro line — see .loading-escape-label. Single source of truth
+   means we can't have the two of them disagreeing (the old footnote said
+   "Sayfayı bırakma" which became a lie when the async refactor made
+   leaving the page recoverable). */
+
+/* The shared mystical loading view (mountLoadingExperience) renders as a
+   fixed full-viewport overlay so it works identically in two contexts:
+   the initial form-submit ritual (where there's nothing underneath
+   anyway) AND the bounce-recovery case on /okuma/:id (where the result
+   template is mounted underneath, ready to reveal once status flips
+   done). Same DOM as renderLoading used to use, just wrapped. */
+.loading-overlay-fixed {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 50;
+  overflow-y: auto;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+.loading-overlay-fixed > .view {
+  width: 100%;
+  min-height: 100vh;
+  padding: 2rem 1.25rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+/* Error-card for the form-submit path. Replaces the loading view with a
+   centred message + "Tekrar dene" button so the user can restart from
+   the form without refreshing. */
+.loading-error-card {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+.loading-error-msg {
+  font-family: var(--font-display);
+  color: var(--gold-light, #e8d08a);
+  font-style: italic;
+  font-size: clamp(1rem, 2.4vw, 1.15rem);
+  max-width: 32ch;
+  margin: 0;
+}
+
+/* ---------- loading escape hatch ----------
+   Subtle panel surfaced under the mystical wait animation (loading
+   screen) and inside the bounce-recovery overlay on /okuma/:id. Lets
+   the user leave an email + we'll ping them, OR copy the okuma link so
+   they can come back any time. Mobile-first: anchored to the bottom of
+   the viewport with a translucent backdrop so it floats above the
+   constellation animation without disrupting layout. */
+.loading-escape {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 2rem));
+  background: rgba(10, 14, 26, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(201, 168, 76, 0.22);
+  border-radius: 12px;
+  padding: 0.9rem 1rem 0.85rem;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  text-align: center;
+  animation: loading-escape-fade-in 0.6s ease 0.4s both;
+}
+@keyframes loading-escape-fade-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.loading-escape-label {
+  margin: 0 0 0.15rem;
   font-family: var(--font-display);
   font-style: italic;
-  color: rgba(184, 196, 212, 0.5);
-  font-size: clamp(0.85rem, 1.8vw, 0.95rem);
-  line-height: 1.6;
+  color: var(--gold-light, #e8d08a);
+  font-size: 0.88rem;
+  line-height: 1.45;
   letter-spacing: 0.01em;
-  max-width: 42ch;
-  text-align: center;
-  margin: 1rem 1.25rem 0;
-  padding-top: 1.5rem;
 }
-.loading-reassurance::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 90px;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(201, 168, 76, 0.45),
-    transparent
-  );
+.loading-escape-email {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+/* Confirmed-state replacement for the email form: when an email is
+   already on the row (just-submitted, or set by a previous tab / a
+   prior visit on a shared link), the form goes away and this single
+   reassuring line takes its place. Same vertical rhythm so the panel
+   doesn't jump. */
+.loading-escape-confirmed {
+  margin: 0;
+  padding: 0.55rem 0;
+  color: #6ad8a3;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  text-align: center;
+}
+.loading-escape-email input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: var(--fg, #e8e4d8);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.88rem;
+  font-family: inherit;
+  min-width: 0;
+}
+.loading-escape-email input:focus {
+  outline: none;
+  border-color: rgba(201, 168, 76, 0.5);
+}
+.loading-escape-email input:disabled {
+  opacity: 0.55;
+}
+.loading-escape-btn,
+.loading-escape-copy {
+  background: transparent;
+  color: var(--gold, #c9a84c);
+  border: 1px solid rgba(201, 168, 76, 0.35);
+  border-radius: 6px;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.loading-escape-btn:hover:not(:disabled),
+.loading-escape-copy:hover {
+  border-color: var(--gold, #c9a84c);
+  background: rgba(201, 168, 76, 0.08);
+}
+.loading-escape-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.loading-escape-copy {
+  width: 100%;
+}
+.loading-escape-status {
+  margin: 0;
+  min-height: 1.1em;
+  font-size: 0.78rem;
+  color: rgba(184, 196, 212, 0.6);
+  font-style: italic;
+}
+.loading-escape-status[data-tone="ok"] {
+  color: #6ad8a3;
+  font-style: normal;
+}
+.loading-escape-status[data-tone="warn"] {
+  color: #e0b341;
+  font-style: normal;
 }
 
 /* ---------- result ---------- */

@@ -98,24 +98,70 @@ function rowToReading(row: ReadingRow): Reading {
   };
 }
 
-// /api/generate is synchronous so we write the finished row in one go.
-// status/error columns default to ('done', NULL); Stripe metadata columns
-// default to NULL (populated later by the webhook handler).
-export async function insertReading(
+// Async refactor — producer side. /api/generate inserts a placeholder
+// row (no sections yet, status='pending') and enqueues a GENERATE_QUEUE
+// job, then returns the id immediately so the client can navigate to
+// /okuma/:id and start polling. The queue consumer later calls
+// markReadingDone() or markReadingFailed().
+//
+// sections is NOT NULL in the schema (migration 0001), so we bind '{}'
+// as a placeholder — rowToReading already treats '{}' as "no sections"
+// when materialising the Reading object, so reads of a pending row
+// surface sections=null cleanly.
+export async function insertReadingPending(
   db: D1Database,
-  reading: { id: string; formData: FormData; sections: YildiznameSections; unlocked: boolean },
+  reading: { id: string; formData: FormData },
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO readings (id, form_data, sections, unlocked)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO readings (id, form_data, sections, unlocked, status)
+       VALUES (?, ?, '{}', 0, 'pending')`,
     )
-    .bind(
-      reading.id,
-      JSON.stringify(reading.formData),
-      JSON.stringify(reading.sections),
-      reading.unlocked ? 1 : 0,
+    .bind(reading.id, JSON.stringify(reading.formData))
+    .run();
+}
+
+// Async refactor — consumer side, success path. Persist the LLM output
+// and flip the row to status='done'. Clears any prior 'error' state in
+// case this is a retry of a previously-failed message. Does NOT touch
+// `unlocked` — the row stays in the free-preview state until Stripe.
+export async function markReadingDone(
+  db: D1Database,
+  id: string,
+  sections: YildiznameSections,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE readings
+          SET sections = ?,
+              status = 'done',
+              error = NULL
+        WHERE id = ?`,
     )
+    .bind(JSON.stringify(sections), id)
+    .run();
+}
+
+// Async refactor — consumer side, failure path. Cloudflare Queues will
+// retry the message a few times with exponential backoff (see
+// wrangler.toml max_retries); we only call this from the consumer's
+// catch block as the FINAL hand-off, so the row reflects the most
+// recent error. The truncate keeps a runaway stack trace from filling
+// the column — 500 chars is plenty for the brief signal the frontend
+// + admin Ops page need.
+export async function markReadingFailed(
+  db: D1Database,
+  id: string,
+  errorMsg: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE readings
+          SET status = 'error',
+              error = ?
+        WHERE id = ?`,
+    )
+    .bind(errorMsg.slice(0, 500), id)
     .run();
 }
 

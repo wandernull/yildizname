@@ -71,7 +71,7 @@ export interface CheckoutSessionResult {
 // → invoice defaults to English regardless of the Checkout language.
 export async function createStripeCustomer(
   env: Env,
-  args: { readingId: string },
+  args: { readingId: string; email?: string | null },
 ): Promise<{ id: string }> {
   const params = new URLSearchParams();
   // Tell Stripe to render any future invoice / receipt / hosted page
@@ -81,6 +81,19 @@ export async function createStripeCustomer(
   // Stamp the reading id in customer metadata so we can trace a Stripe
   // customer back to a reading from the Dashboard if support ever asks.
   params.append("metadata[reading_id]", args.readingId);
+  // Seed the Customer with the email we captured on the loading screen
+  // (if any). Stripe Checkout locks this field as read-only at the
+  // form — by design, the email is the customer's canonical identity —
+  // and we explicitly want that: a user who typed an email 2 minutes
+  // ago at the loading screen is overwhelmingly going to use that same
+  // address to pay. Pre-fill > re-typing. If they later need a
+  // different email on file, the admin Ops page has an email-sync
+  // tool. (We tested editable-pre-fill paths: setting customer_email
+  // on the Session is rejected by Stripe when a `customer` is attached,
+  // and customer_update[email]=auto isn't a valid Stripe parameter.)
+  if (args.email && args.email.includes("@")) {
+    params.append("email", args.email);
+  }
 
   const res = await fetch(`${STRIPE_API_BASE}/customers`, {
     method: "POST",
@@ -135,6 +148,18 @@ export async function createCheckoutSession(
   // Flow the billing details the user enters on the Checkout page back
   // to the Customer object — so the invoice has the right name + address
   // and any future support lookup has them too.
+  //
+  // No email pre-fill: Stripe's API doesn't let us combine a `customer`
+  // (which we need for preferred_locales='tr' → Turkish invoice) with
+  // `customer_email` on the Session ("You may only specify one of these
+  // parameters: customer, customer_email."). And setting the email on
+  // the Customer itself locks the field as read-only at Checkout (the
+  // address is treated as the canonical customer identity). The
+  // loading-screen email-capture still pays off via the "hazır" email;
+  // the user re-types at Checkout, and the webhook captures
+  // session.customer_details.email into customer_email after payment
+  // (overwriting the loading-screen one — Stripe's is the verified
+  // billing address).
   params.append("customer_update[name]", "auto");
   params.append("customer_update[address]", "auto");
 

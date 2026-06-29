@@ -61,6 +61,33 @@ ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 binding = "TTS_BUCKET"
 bucket_name = "yildizname-tts"
 
+# Background generation queue (Workers Paid). Producer: POST /api/generate
+# enqueues {readingId} and returns immediately. Consumer: the Worker's
+# queue() handler runs the ~2-minute Anthropic LLM call independently of
+# the inbound client connection, writes sections + status=done, and
+# emails the customer if they left an address on the loading screen.
+# Survives mobile tab/app switches and in-app browser kills, which is the
+# whole point of the async refactor.
+#
+# Locally, miniflare simulates the queue in-process — no remote queue
+# creation needed for dev. Before the first prod deploy, run once:
+#   npx wrangler queues create yildizname-generation
+[[queues.producers]]
+binding = "GENERATION_QUEUE"
+queue = "yildizname-generation"
+
+[[queues.consumers]]
+queue = "yildizname-generation"
+# One message per invocation — each generation is ~2 minutes of streaming
+# I/O against Anthropic; concurrent batches would just hit the API rate
+# limit. Sequential is correct here.
+max_batch_size = 1
+# Three retries on consumer failure with default exponential backoff
+# (~10–30s total before dead-letter). Anthropic transient blips usually
+# clear in seconds; a sustained failure ends with status=error in D1 for
+# the operator to inspect.
+max_retries = 3
+
 # Worker Custom Domains are attached out-of-band via the Cloudflare API
 # because the CI deploy token (CLOUDFLARE_API_TOKEN) is scoped narrowly for
 # Workers:Edit only — it does not have Zone:DNS:Edit / Zone:Workers Routes:Edit.
