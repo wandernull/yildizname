@@ -1,4 +1,4 @@
-import { splitKarakterinOzu } from "./text";
+import { shouldChunk, splitIntoChunks, splitKarakterinOzu } from "./text";
 import type { Env, SectionKey, YildiznameSections } from "./types";
 
 // On-demand TTS via ElevenLabs streaming API, cached in R2 for 15 days.
@@ -33,16 +33,20 @@ export type TtsSection = SectionKey | "karakterinOzuRest";
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 
-// Bump this when buildSpeechText() changes in a way that meaningfully alters
-// the audio output (different prosody pre-processing, different prompt
-// shaping, different text content for a given section key, etc). Old objects
-// under earlier prefixes get garbage-collected by the bucket's 15-day
-// lifecycle rule, and the next listener triggers a fresh synthesis under the
-// new prefix.
+// Bump this when buildSpeechText() or chunking changes in a way that
+// meaningfully alters the audio output (different prosody pre-processing,
+// different chunk sizes, etc). Old objects under earlier prefixes get
+// garbage-collected by the bucket's 15-day lifecycle rule.
 //   v2 → v3: karakterinOzu changed from "full audio" to "preview audio";
-//            karakterinOzuRest introduced for the post-unlock 2/3, which
-//            the client plays back-to-back after the preview.
-const TTS_CACHE_PREFIX = "tts/v3";
+//            karakterinOzuRest introduced for the post-unlock 2/3.
+//   v3 → v4: per-section single MP3 → per-(section, chunkIdx) MP3s.
+//            Long sections split into ~12-15s chunks (cap ~26s) so every
+//            served file has a known Content-Length and stays well under
+//            the mobile <audio> chunked-EOF cutoff threshold. Short
+//            sections (< 60s estimated; karakterinOzu's free preview)
+//            stay as a single chunk to avoid seams in the funnel-critical
+//            first impression.
+const TTS_CACHE_PREFIX = "tts/v4";
 
 const VOICE_SETTINGS = {
   stability: 0.6,
@@ -56,21 +60,17 @@ const VOICE_SETTINGS = {
 // under a second; anything past 30s here means the connection is sick.
 const HEADERS_TIMEOUT_MS = 30_000;
 
-export function ttsKey(readingId: string, section: TtsSection): string {
-  return `${TTS_CACHE_PREFIX}/${readingId}/${section}.mp3`;
-}
-
 // Shape the text for prosody-friendly speech. Three passes:
 //   1. Resolve which text body to read based on the (virtual) section key:
 //        karakterinOzu     → kapakSözü + 1/3 preview of karakterinOzu
 //        karakterinOzuRest → JUST the 2/3 remainder (no kapakSözü prepend,
 //                            it's already in the preview audio that plays
-//                            immediately before this clip)
+//                            immediately before this clip). May be "" when
+//                            the text was too short to split (preview
+//                            already covers the whole thing); getChunkCount
+//                            returns 0 in that case so the route never
+//                            tries to synthesize anything.
 //        anything else     → just sections[section]
-//      buildKarakterinOzuRestText returns "" when the text was too short
-//      to split (preview already covers the whole thing). The TTS endpoint
-//      detects that and returns 404 so the client can skip the rest item
-//      in its play queue cleanly.
 //   2. Strip numerology parentheticals — the müneccim prompt deliberately
 //      invokes ebced math and the model loves to show its work in parens
 //      like "(1+9+8+9=27, 2+7=9)". ElevenLabs reads that as "one plus nine
@@ -105,48 +105,92 @@ function buildSpeechText(
   return text.replace(/([.!?…])\s+(?=[^—])/g, "$1 — ");
 }
 
-// Helper exposed so the /api/tts route can detect the empty-rest case
-// (text too short to split) BEFORE invoking synthesize, and 404 cleanly.
-export function isRestEmptyFor(sections: YildiznameSections): boolean {
-  return splitKarakterinOzu(sections.karakterinOzu).rest.length === 0;
+export function chunkKey(
+  readingId: string,
+  section: TtsSection,
+  chunkIdx: number,
+): string {
+  return `${TTS_CACHE_PREFIX}/${readingId}/${section}/${chunkIdx}.mp3`;
 }
 
-export async function fetchCachedAudio(
+// Build the chunk list for a given section, applying the chunk-or-monolith
+// rule from text.ts:
+//   - shouldChunk(shapedText)=false (short section) → 1 chunk (whole text)
+//   - shouldChunk(shapedText)=true  (long section)  → splitIntoChunks output
+// Combines buildSpeechText's text shaping (kapakSözü prepend for
+// karakterinOzu, math-paren strip, em-dash injection) with the chunker;
+// callers should always go through this, never call splitIntoChunks
+// directly on a raw section body.
+function buildChunks(
+  section: TtsSection,
+  sections: YildiznameSections,
+): string[] {
+  const shaped = buildSpeechText(section, sections);
+  if (!shaped) return [];
+  if (!shouldChunk(shaped)) return [shaped];
+  return splitIntoChunks(shaped);
+}
+
+// How many chunks does this section produce? Used by the route handler
+// to build the manifest (`chunkCounts` field on /api/reading/:id done
+// response) so the client knows the queue length.
+export function getChunkCount(
+  section: TtsSection,
+  sections: YildiznameSections,
+): number {
+  return buildChunks(section, sections).length;
+}
+
+export async function fetchCachedChunk(
   env: Env,
   readingId: string,
   section: TtsSection,
+  chunkIdx: number,
 ): Promise<R2ObjectBody | null> {
-  return env.TTS_BUCKET.get(ttsKey(readingId, section));
+  return env.TTS_BUCKET.get(chunkKey(readingId, section, chunkIdx));
 }
 
-// Calls ElevenLabs streaming endpoint and tees the response body so one
-// branch streams to the client while the other is written to R2 in the
-// background. The caller is responsible for passing executionCtx so the
-// R2 put can be tracked with waitUntil — but R2 puts on Cloudflare are
-// fast and will normally finish well within the client streaming window
-// even without it.
-export async function synthesizeStream(
+// Synthesize one chunk via ElevenLabs' NON-streaming endpoint (no
+// `/stream` suffix) — returns the full MP3 as one buffer, which gives
+// us a known Content-Length for the response (the entire point of the
+// v4 architecture; mobile <audio> needs Content-Length to play long
+// streams to the end).
+//
+// Cost note: ElevenLabs charges by characters synthesized, NOT by API
+// calls — so chunking has zero extra API cost beyond the per-call HTTP
+// overhead. Total characters synthesized are identical to the v3 path.
+//
+// Returns null if chunkIdx is out of range (route 404s in that case).
+// Throws on ElevenLabs error; the route catches and 502s.
+export async function synthesizeChunk(
   env: Env,
   ctx: ExecutionContext,
   readingId: string,
   section: TtsSection,
+  chunkIdx: number,
   sections: YildiznameSections,
-): Promise<ReadableStream<Uint8Array>> {
-  const text = buildSpeechText(section, sections);
+): Promise<Uint8Array | null> {
+  const chunks = buildChunks(section, sections);
+  if (chunkIdx < 0 || chunkIdx >= chunks.length) return null;
+  const text = chunks[chunkIdx];
 
+  // Abort guard against a stuck ElevenLabs connection. Non-streaming
+  // response time is bounded by synthesis duration (~3-4s per ~12-15s
+  // chunk) so 30s here is plenty of headroom; anything slower indicates
+  // the upstream is sick.
   const controller = new AbortController();
-  const headersTimer = setTimeout(() => controller.abort(), HEADERS_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), HEADERS_TIMEOUT_MS);
 
   let res: Response;
   try {
     res = await fetch(
-      `${ELEVENLABS_BASE}/${env.ELEVENLABS_VOICE_ID}/stream?output_format=mp3_44100_128`,
+      `${ELEVENLABS_BASE}/${env.ELEVENLABS_VOICE_ID}?output_format=mp3_44100_128`,
       {
         method: "POST",
         headers: {
           "xi-api-key": env.ELEVENLABS_API_KEY,
-          "content-type": "application/json",
-          accept: "audio/mpeg",
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
         },
         body: JSON.stringify({
           text,
@@ -157,105 +201,49 @@ export async function synthesizeStream(
       },
     );
   } finally {
-    clearTimeout(headersTimer);
+    clearTimeout(timer);
   }
 
-  if (!res.ok || !res.body) {
+  if (!res.ok) {
     const body = await res.text().catch(() => "");
-    console.error("[tts] elevenlabs non-2xx", {
+    console.error("[tts] elevenlabs chunk non-2xx", {
+      readingId,
+      section,
+      chunkIdx,
       status: res.status,
       body: body.slice(0, 500),
     });
     throw new Error(`ElevenLabs ${res.status}`);
   }
 
-  // Tee: one branch goes to the client, the other gets buffered and
-  // written to R2. R2.put cannot accept a chunked-encoding stream directly
-  // (it needs a known content length), so we accumulate the bytes from one
-  // branch into a Uint8Array and put that. Both branches drain in parallel
-  // so the client streaming UX is unaffected — buffering only adds a tiny
-  // amount of memory pressure (~2 MB per concurrent reading).
-  const [clientBranch, r2Branch] = res.body.tee();
+  const bytes = new Uint8Array(await res.arrayBuffer());
 
+  // Write to R2 in the background — caller already has the bytes to
+  // return to the client. Idempotent on duplicate writes (e.g. two
+  // listeners hitting the same uncached chunk concurrently).
   ctx.waitUntil(
-    bufferAndStore(env, readingId, section, r2Branch).catch((err) => {
-      console.error("[tts] R2 put failed", {
+    env.TTS_BUCKET.put(chunkKey(readingId, section, chunkIdx), bytes, {
+      httpMetadata: {
+        contentType: "audio/mpeg",
+        cacheControl: "public, max-age=1296000, immutable",
+      },
+      customMetadata: {
+        section,
+        readingId,
+        chunkIdx: String(chunkIdx),
+        synthesizedAt: new Date().toISOString(),
+        bytes: String(bytes.byteLength),
+      },
+    }).catch((err) => {
+      console.error("[tts] R2 chunk put failed", {
         readingId,
         section,
+        chunkIdx,
         err: err instanceof Error ? err.message : String(err),
       });
     }),
   );
 
-  // DIAGNOSTIC ONLY (Phase: investigating the "audio cuts off near end on
-  // first-synth listen" report). Counts bytes that actually leave the
-  // Worker toward the client; bufferAndStore logs the matching count for
-  // the R2 branch. If they're equal, the server-side tee is fine and the
-  // browser is ending playback early on the chunked stream (no
-  // Content-Length). If they differ, the client branch is being short-
-  // changed at the Worker boundary and the tee/streaming logic needs to
-  // change. Remove both logs once root-caused.
-  let clientBytes = 0;
-  const counted = clientBranch.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        clientBytes += chunk.byteLength;
-        controller.enqueue(chunk);
-      },
-      flush() {
-        console.log("[tts] client branch flushed", {
-          readingId,
-          section,
-          clientBytes,
-        });
-      },
-    }),
-  );
-  return counted;
+  return bytes;
 }
 
-async function bufferAndStore(
-  env: Env,
-  readingId: string,
-  section: TtsSection,
-  stream: ReadableStream<Uint8Array>,
-): Promise<void> {
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  const reader = stream.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      chunks.push(value);
-      total += value.length;
-    }
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    bytes.set(c, offset);
-    offset += c.length;
-  }
-  await env.TTS_BUCKET.put(ttsKey(readingId, section), bytes, {
-    httpMetadata: {
-      contentType: "audio/mpeg",
-      cacheControl: "public, max-age=1296000, immutable",
-    },
-    customMetadata: {
-      section,
-      readingId,
-      synthesizedAt: new Date().toISOString(),
-      bytes: String(total),
-    },
-  });
-  // DIAGNOSTIC ONLY — pair this with the "client branch flushed" log
-  // emitted in synthesizeStream. Equal totals → server is fine, browser
-  // ends playback early; unequal → client branch short-changed at the
-  // Worker boundary. Remove once root-caused.
-  console.log("[tts] r2 branch buffered", {
-    readingId,
-    section,
-    r2Bytes: total,
-  });
-}

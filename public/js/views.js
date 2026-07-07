@@ -939,21 +939,74 @@ function fadeVolume(audio, from, to, durationMs) {
 // flow without re-synthesising the preview portion that's already
 // cached from the free state. Play/pause/stop UI controls the compound
 // playback as one thing; the user has no idea it's two files.
-function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStopped }) {
+function makeAudioPlayer({
+  readingId,
+  sectionKey,
+  chunkCounts,
+  autoplay = false,
+  manuallyStopped,
+}) {
   const wrap = document.createElement("div");
   wrap.className = "audio-player";
 
-  // Normalise to an array. primaryKey is the first segment — used for
-  // funnel tracking (so paid replays of karakterinOzu still report as
-  // listened_free, which is the right bucket since the section *is* the
-  // free one even when its audio is now the preview + rest sequence).
-  const keys = Array.isArray(sectionKey) ? sectionKey : [sectionKey];
-  const primaryKey = keys[0];
-  let keyIdx = 0;
+  // Normalise sectionKey to a list of conceptual sections to play
+  // (today: a single section name, or in karakterinOzu's case
+  // ["karakterinOzu", "karakterinOzuRest"] to chain preview→rest after
+  // unlock). Then expand each section into its chunk refs using the
+  // chunkCounts manifest from /api/reading/:id — every served file is
+  // a small per-(section, chunkIdx) MP3 with a known Content-Length,
+  // which is what lets mobile <audio> play long sections to the end
+  // without the chunked-EOF cutoff that bit us on the v3 path.
+  const sectionList = Array.isArray(sectionKey) ? sectionKey : [sectionKey];
+  const primaryKey = sectionList[0];
+  const queue = [];
+  for (const sec of sectionList) {
+    const n = (chunkCounts && chunkCounts[sec]) || 0;
+    for (let i = 0; i < n; i++) queue.push({ section: sec, chunkIdx: i });
+  }
+  let queuePos = 0;
 
   const audio = new Audio();
   audio.preload = autoplay ? "auto" : "none";
-  audio.src = api.ttsUrl(readingId, keys[0]);
+  if (queue.length > 0) {
+    audio.src = api.ttsChunkUrl(
+      readingId,
+      queue[0].section,
+      queue[0].chunkIdx,
+    );
+  }
+
+  // Prefetch the next N chunks ahead of the playback head so by the
+  // time the audio element rolls into them, they're already in the
+  // browser's HTTP cache (responses carry Cache-Control:
+  // max-age=1296000, immutable). Without this, each `ended` event has
+  // to wait a full Worker → R2 (or worse, ElevenLabs synth) round-trip
+  // before the next chunk starts — exactly the gappy experience we
+  // designed chunking to avoid. PREFETCH_AHEAD=2 caps total concurrent
+  // upstream load at 3 (one audio element + two prefetches), matching
+  // the ElevenLabs concurrency limit on our plan. Single AbortController
+  // for all prefetches so dispose() cancels them in one shot.
+  const PREFETCH_AHEAD = 2;
+  const prefetched = new Set();
+  let prefetchAbort = null;
+  const prefetchAhead = (pos) => {
+    for (let i = 1; i <= PREFETCH_AHEAD; i += 1) {
+      const targetPos = pos + i;
+      if (targetPos >= queue.length) break;
+      const ref = queue[targetPos];
+      const url = api.ttsChunkUrl(readingId, ref.section, ref.chunkIdx);
+      if (prefetched.has(url)) continue;
+      prefetched.add(url);
+      if (!prefetchAbort) prefetchAbort = new AbortController();
+      fetch(url, { signal: prefetchAbort.signal }).catch(() => {
+        // Prefetch failure (abort, network blip, 502): drop from set
+        // so the audio element can re-request when it reaches this
+        // chunk. No user-visible error here — the audio element's own
+        // error handler is the one that surfaces failures.
+        prefetched.delete(url);
+      });
+    }
+  };
 
   const playBtn = document.createElement("button");
   playBtn.type = "button";
@@ -1002,18 +1055,27 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
   };
 
   audio.addEventListener("waiting", setUiLoading);
-  audio.addEventListener("playing", setUiPlaying);
+  audio.addEventListener("playing", () => {
+    setUiPlaying();
+    // Fired every time audio actually begins (initial play, resume from
+    // pause, or chunk switch). prefetchAhead is idempotent — already-
+    // prefetched URLs are skipped — so this is safe to call repeatedly.
+    prefetchAhead(queuePos);
+  });
   audio.addEventListener("pause", () => {
     if (!audio.ended) setUiPaused();
   });
   audio.addEventListener("ended", () => {
-    // Compound playback: if more segments queued, switch src and play on.
-    // Single-segment case: keyIdx stays 0, the (0 + 1 < 1) check is false,
-    // and we land in the setUiIdle() branch — identical to the old
-    // single-section behaviour.
-    if (keyIdx + 1 < keys.length) {
-      keyIdx += 1;
-      audio.src = api.ttsUrl(readingId, keys[keyIdx]);
+    // Advance the chunk queue. Single-chunk sections drop straight into
+    // the setUiIdle() branch (queuePos was 0, becomes 1, queue.length
+    // was 1 → not <). Multi-chunk sections (long locked sections, or
+    // post-unlock karakterinOzu + karakterinOzuRest chain) walk through
+    // chunks 0..N-1; each switch is a fast R2 hit since prior chunks
+    // got cached by the first listener.
+    if (queuePos + 1 < queue.length) {
+      queuePos += 1;
+      const next = queue[queuePos];
+      audio.src = api.ttsChunkUrl(readingId, next.section, next.chunkIdx);
       const p = audio.play();
       if (p && typeof p.then === "function") p.catch(() => setUiIdle());
     } else {
@@ -1022,18 +1084,18 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
   });
   audio.addEventListener("error", () => {
     playBtn.classList.remove("loading", "pulse");
-    // Mid-queue error on a compound track (e.g. karakterinOzuRest 404s
-    // because the text was too short to split into preview + rest). Treat
-    // as a graceful end-of-playback rather than surfacing an error — the
-    // user already heard the meaningful audio in the previous segment.
-    if (keyIdx > 0) {
+    // Mid-queue error on a multi-chunk track (e.g. a later karakterinOzuRest
+    // chunk 404s because the rest text was unusually short). Treat as a
+    // graceful end-of-playback rather than surfacing an error — the user
+    // already heard the meaningful audio in earlier chunks.
+    if (queuePos > 0) {
       setUiIdle();
       return;
     }
-    // First-segment failure = real TTS pipeline failure (server-side 5xx,
-    // ElevenLabs upstream down, quota exhausted, network blip). Stay in-
-    // voice — müneccim-anthropomorphism, no technical disclosure. Mirrors
-    // the server-side error string in src/index.ts.
+    // First-chunk failure = real TTS pipeline failure (server-side 5xx,
+    // ElevenLabs upstream down, quota exhausted, network blip). Stay
+    // in-voice — müneccim-anthropomorphism, no technical disclosure.
+    // Mirrors the server-side error string in src/index.ts.
     setUiIdle("Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.");
   });
 
@@ -1062,11 +1124,15 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
     } catch {
       /* may throw if metadata not loaded yet */
     }
-    // Reset compound queue back to the first segment so a subsequent play
-    // starts from the beginning of the track, not from mid-rest.
-    if (keyIdx !== 0) {
-      keyIdx = 0;
-      audio.src = api.ttsUrl(readingId, keys[0]);
+    // Reset queue back to the first chunk so a subsequent play starts
+    // from the beginning of the track, not from mid-section.
+    if (queuePos !== 0 && queue.length > 0) {
+      queuePos = 0;
+      audio.src = api.ttsChunkUrl(
+        readingId,
+        queue[0].section,
+        queue[0].chunkIdx,
+      );
     }
     if (manuallyStopped) manuallyStopped();
     setUiIdle();
@@ -1094,6 +1160,14 @@ function makeAudioPlayer({ readingId, sectionKey, autoplay = false, manuallyStop
     } catch {
       /* ignore */
     }
+    // Cancel any in-flight chunk prefetches when the player goes away
+    // (user navigated, view re-rendered). Completed prefetches stay in
+    // the browser HTTP cache — they'll still be hot if the same reading
+    // is opened again.
+    if (prefetchAbort) {
+      prefetchAbort.abort();
+      prefetchAbort = null;
+    }
   };
 
   return { wrap, audio, dispose };
@@ -1109,6 +1183,7 @@ function makeSection({
   locked,
   readingId,
   sectionKey,
+  chunkCounts,
   autoplay,
   manuallyStopped,
   counter,
@@ -1162,6 +1237,7 @@ function makeSection({
   const player = makeAudioPlayer({
     readingId,
     sectionKey,
+    chunkCounts,
     autoplay,
     manuallyStopped,
   });
@@ -1773,17 +1849,19 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         title: SECTION_TITLES.karakterinOzu,
         text: data.karakterinOzu,
         readingId: id,
-        // sectionKey gates which audio file(s) the per-section player
-        // loads. In free state, /api/reading/:id has already truncated
-        // data.karakterinOzu to the preview, and the karakterinOzu audio
-        // variant (kapakSözü + preview) matches that — single file.
-        // Once unlocked, the player plays preview + rest BACK-TO-BACK
-        // via the compound-array form of sectionKey; the preview portion
-        // is reused from R2 cache (already synth'd during free state) so
-        // we only pay ElevenLabs for the new 2/3 rest, not the full text.
+        // sectionKey gates which (virtual) sections the per-section
+        // player walks. In free state, /api/reading/:id has truncated
+        // data.karakterinOzu to the preview, and the player plays the
+        // chunks of just karakterinOzu (the preview audio variant
+        // matches the preview text). Once unlocked, sectionKey expands
+        // to [karakterinOzu, karakterinOzuRest] so chunks of preview
+        // and rest play back-to-back as one continuous track — the
+        // preview chunks are already in R2 cache from the free state,
+        // so we only pay ElevenLabs for the new rest chunks.
         sectionKey: isUnlocked
           ? ["karakterinOzu", "karakterinOzuRest"]
           : "karakterinOzu",
+        chunkCounts: data.chunkCounts,
         autoplay: journeyAutoplay && !userStoppedOnce,
         manuallyStopped: markStopped,
         // Counter only on the free-preview state — once unlocked the user
@@ -1862,6 +1940,7 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
             text,
             readingId: id,
             sectionKey: key,
+            chunkCounts: data.chunkCounts,
             manuallyStopped: markStopped,
           });
           sectionsHost.appendChild(sec.node);
@@ -1933,18 +2012,63 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         }
 
         // Sequential playback: karakterinOzu (preview) → karakterinOzuRest
-        // (remaining 2/3, no kapakSözü prepend) → the nine locked sections.
-        // Preview audio is already cached from the free state, so the chain
-        // only triggers one new synthesis (karakterinOzuRest). If the text
-        // was too short to split, karakterinOzuRest 404s and the error
-        // handler below skips-and-advances rather than hard-stopping.
-        const queue = [
+        // (remaining 2/3, no kapakSözü prepend) → the nine locked
+        // sections. Flatten the section list × chunkCounts into a flat
+        // queue of {section, chunkIdx} refs — each chunk is its own
+        // small MP3 with a known Content-Length (mobile-safe). The
+        // preview chunks are already in R2 cache from the free state,
+        // so the chain only triggers fresh synth for the post-unlock
+        // chunks. If a section happens to be empty (e.g. karakterinOzuRest
+        // when text was too short to split), chunkCounts[section] is 0
+        // and those refs simply don't appear in the queue — no
+        // skip-on-404 needed.
+        const sectionList = [
           "karakterinOzu",
           "karakterinOzuRest",
           ...LOCKED_SECTION_KEYS,
         ];
+        const queue = [];
+        for (const sec of sectionList) {
+          const n = (data.chunkCounts && data.chunkCounts[sec]) || 0;
+          for (let i = 0; i < n; i++) queue.push({ section: sec, chunkIdx: i });
+        }
         let queueIdx = 0;
         let chainActive = false;
+
+        // Chunk prefetch pipeline for the chain player. Mirrors the
+        // per-section makeAudioPlayer prefetch: PREFETCH_AHEAD=2 keeps
+        // total upstream concurrency at 3 (one audio element + two
+        // background fetches), matching the ElevenLabs plan cap. Chain
+        // playback is a much longer queue (up to 11 sections × N chunks
+        // each) so the pipeline pays off even more here — without it
+        // every "ended" event waited for a full Worker → R2 round-trip
+        // before the next chunk started, giving the gappy experience
+        // the chunking design was supposed to fix.
+        const CHAIN_PREFETCH_AHEAD = 2;
+        const chainPrefetched = new Set();
+        let chainPrefetchAbort = null;
+        const chainPrefetch = (pos) => {
+          for (let i = 1; i <= CHAIN_PREFETCH_AHEAD; i += 1) {
+            const targetPos = pos + i;
+            if (targetPos >= queue.length) break;
+            const ref = queue[targetPos];
+            const url = api.ttsChunkUrl(id, ref.section, ref.chunkIdx);
+            if (chainPrefetched.has(url)) continue;
+            chainPrefetched.add(url);
+            if (!chainPrefetchAbort) chainPrefetchAbort = new AbortController();
+            fetch(url, { signal: chainPrefetchAbort.signal }).catch(() => {
+              chainPrefetched.delete(url);
+            });
+          }
+        };
+        // Cancel any in-flight chain prefetches on cleanup — matches the
+        // chainAudio disposable pushed earlier at the top of the IIFE.
+        disposables.push(() => {
+          if (chainPrefetchAbort) {
+            chainPrefetchAbort.abort();
+            chainPrefetchAbort = null;
+          }
+        });
 
         const onEndedAdvance = () => {
           if (!chainActive) return;
@@ -1954,7 +2078,9 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
             listenBtn.textContent = LISTEN_IDLE;
             return;
           }
-          chainAudio.src = api.ttsUrl(id, queue[queueIdx]);
+          const ref = queue[queueIdx];
+          chainAudio.src = api.ttsChunkUrl(id, ref.section, ref.chunkIdx);
+          chainPrefetch(queueIdx);
           chainAudio.play().catch(() => {
             chainActive = false;
             listenBtn.textContent = LISTEN_IDLE;
@@ -1962,18 +2088,16 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         };
         chainAudio.addEventListener("ended", onEndedAdvance);
         chainAudio.addEventListener("error", () => {
-          // karakterinOzuRest 404 (text too short to split) → graceful
-          // skip-and-advance, not an error.
-          if (
-            chainActive &&
-            queue[queueIdx] === "karakterinOzuRest" &&
-            queueIdx + 1 < queue.length
-          ) {
+          // Mid-chain transient error (network blip, an isolated chunk
+          // synth fail) after at least one chunk has played — skip to
+          // the next chunk rather than hard-stopping. The user has
+          // committed to the chain; tiny gap is better than full stop.
+          if (chainActive && queueIdx > 0 && queueIdx + 1 < queue.length) {
             onEndedAdvance();
             return;
           }
-          // Real TTS failure during chain playback — surface the in-voice
-          // copy on the pill briefly, then revert.
+          // First-chunk failure = real TTS pipeline issue — surface the
+          // in-voice copy on the pill briefly, then revert.
           chainActive = false;
           listenBtn.textContent =
             "Müneccim'in sesi şu an gelmiyor. Birazdan tekrar dene.";
@@ -1991,11 +2115,14 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
             listenBtn.textContent = LISTEN_IDLE;
             return;
           }
+          if (queue.length === 0) return; // defensive: no chunks at all
           // Funnel: fire only on the start of a chain play, not pause/stop.
           api.trackEvent(id, "listened_chain");
           chainActive = true;
           queueIdx = 0;
-          chainAudio.src = api.ttsUrl(id, queue[queueIdx]);
+          const ref = queue[0];
+          chainAudio.src = api.ttsChunkUrl(id, ref.section, ref.chunkIdx);
+          chainPrefetch(0);
           chainAudio.play().catch(() => {
             chainActive = false;
             listenBtn.textContent = LISTEN_IDLE;

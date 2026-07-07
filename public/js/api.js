@@ -57,10 +57,15 @@ export function startCheckout(id) {
   });
 }
 
-// Audio URL for a (reading, section) pair. Server handles unlock checks +
-// R2 cache + ElevenLabs fallback. Consumer just slaps this on an <audio src>.
-export function ttsUrl(readingId, section) {
-  return `/api/tts/${encodeURIComponent(readingId)}/${encodeURIComponent(section)}`;
+// Audio URL for one chunk of a (reading, section). Sections are
+// chunked at synthesis time (~12-15s per chunk) so each served MP3 has
+// a known Content-Length — mobile <audio> requires this to play long
+// streams to the end (chunked-transfer-encoding without Content-Length
+// gets cut off near the end on iOS Safari and many in-app browsers).
+// chunkCounts on /api/reading/:id tells the caller how many chunks per
+// section to walk through.
+export function ttsChunkUrl(readingId, section, chunkIdx) {
+  return `/api/tts/${encodeURIComponent(readingId)}/${encodeURIComponent(section)}/${chunkIdx}`;
 }
 
 // Funnel analytics — fires a single funnel event for the given reading.

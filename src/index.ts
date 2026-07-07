@@ -40,10 +40,9 @@ import {
 } from "./lib/email";
 import { getKarakterinOzuTeaser, splitKarakterinOzu } from "./lib/text";
 import {
-  fetchCachedAudio,
-  isRestEmptyFor,
-  synthesizeStream,
-  ttsKey,
+  fetchCachedChunk,
+  getChunkCount,
+  synthesizeChunk,
   type TtsSection,
 } from "./lib/tts";
 import {
@@ -218,6 +217,24 @@ app.get("/api/reading/:id", async (c) => {
     ? sections.karakterinOzu
     : splitKarakterinOzu(sections.karakterinOzu).preview;
 
+  // chunkCounts: how many TTS chunks each (virtual) section has under
+  // the new per-chunk synthesis architecture (tts/v4). Client uses this
+  // to build the per-section playback queue without an extra round-trip
+  // per section. Empty sections (e.g. karakterinOzuRest when text too
+  // short to split) report 0 so the client never tries to fetch any.
+  const chunkCounts = {
+    karakterinOzu: getChunkCount("karakterinOzu", sections),
+    karakterinOzuRest: getChunkCount("karakterinOzuRest", sections),
+    gizliHuylar: getChunkCount("gizliHuylar", sections),
+    ruhsalYuk: getChunkCount("ruhsalYuk", sections),
+    askEvlilik: getChunkCount("askEvlilik", sections),
+    esinKarakteri: getChunkCount("esinKarakteri", sections),
+    cocukYuva: getChunkCount("cocukYuva", sections),
+    rizkKariyer: getChunkCount("rizkKariyer", sections),
+    nazarAgirlik: getChunkCount("nazarAgirlik", sections),
+    saglik: getChunkCount("saglik", sections),
+    donumNoktalari: getChunkCount("donumNoktalari", sections),
+  };
   const base = {
     id: reading.id,
     // Mirror the pending/error short-circuit above — having `status` on
@@ -235,6 +252,7 @@ app.get("/api/reading/:id", async (c) => {
     karakterinOzuTeaser: reading.unlocked
       ? null
       : getKarakterinOzuTeaser(sections.karakterinOzu),
+    chunkCounts,
   };
   if (!reading.unlocked) {
     return c.json(base);
@@ -620,18 +638,23 @@ app.post("/api/stripe/webhook", async (c) => {
 });
 
 // ----- TTS ------------------------------------------------------------------
-// GET /api/tts/:readingId/:section
-//   - karakterinOzu       free — audio = kapakSözü + 1/3 PREVIEW
-//   - karakterinOzuRest   paid — audio = JUST the 2/3 remainder. The
-//                          client plays this back-to-back after the
-//                          preview to give paid users the full section
-//                          without re-synthesising what we already paid
-//                          for in the free state.
+// GET /api/tts/:readingId/:section/:chunkIdx
+//   Returns one chunk of audio for the given section. Sections are
+//   chunked at synthesis time (~12-15s of audio per chunk) so every
+//   served file is small enough AND has a known Content-Length —
+//   sidesteps the mobile <audio> chunked-EOF cutoff issue that was
+//   eating the end of long sections.
+//
+//   Gating:
+//   - karakterinOzu        free — chunkIdx 0..N of (kapakSözü + 1/3 preview)
+//   - karakterinOzuRest    paid — chunkIdx 0..N of the 2/3 remainder
 //   - the 9 locked sections require reading.unlocked = true
-//   - response is audio/mpeg, served from R2 cache when present and freshly
-//     synthesised via ElevenLabs streaming when not. Cache keys differ for
-//     karakterinOzu vs karakterinOzuRest so the two audio variants don't
-//     collide.
+//
+//   The client knows how many chunks per section via `chunkCounts` on
+//   the /api/reading/:id done response. Out-of-range chunkIdx → 404.
+//   Empty section (e.g. karakterinOzuRest when text too short to
+//   split) → chunkCounts[section] = 0 → client never requests; if
+//   somehow requested, also 404s.
 
 const FREE_SECTIONS = new Set<TtsSection>(["karakterinOzu"]);
 const ALLOWED_TTS_SECTIONS = new Set<TtsSection>([
@@ -640,10 +663,15 @@ const ALLOWED_TTS_SECTIONS = new Set<TtsSection>([
   ...LOCKED_SECTION_KEYS,
 ]);
 
-app.get("/api/tts/:readingId/:section", async (c) => {
+app.get("/api/tts/:readingId/:section/:chunkIdx", async (c) => {
   const readingId = c.req.param("readingId");
   const section = c.req.param("section") as TtsSection;
+  const chunkIdxRaw = c.req.param("chunkIdx");
+  const chunkIdx = Number.parseInt(chunkIdxRaw, 10);
 
+  if (!Number.isInteger(chunkIdx) || chunkIdx < 0) {
+    return c.json({ error: "Geçersiz parça." }, 400);
+  }
   if (!ALLOWED_TTS_SECTIONS.has(section)) {
     return c.json({ error: "Geçersiz bölüm." }, 400);
   }
@@ -656,43 +684,43 @@ app.get("/api/tts/:readingId/:section", async (c) => {
     return c.json({ error: "Bu bölüm kilitli." }, 403);
   }
 
-  // Edge case: text too short to split into preview + rest (e.g. an
-  // unusually terse karakterinOzu). The preview already covers the whole
-  // thing; there's no rest audio to play. Return 404 so the client's chain
-  // queue / compound-audio player cleanly skips this segment and moves on
-  // to the next item without an error toast.
-  if (section === "karakterinOzuRest" && isRestEmptyFor(reading.sections)) {
-    return c.json({ error: "Bu bölümün devamı yok." }, 404);
-  }
-
-  const audioHeaders = {
+  const audioHeaders = (size: number) => ({
     "Content-Type": "audio/mpeg",
+    "Content-Length": String(size),
     "Cache-Control": "public, max-age=1296000, immutable",
     "X-Content-Type-Options": "nosniff",
-  };
+  });
 
-  // Cache hit — stream the R2 object straight back.
-  const cached = await fetchCachedAudio(c.env, readingId, section);
+  // Cache hit — stream the R2 object back with the correct Content-Length
+  // (R2 objects always carry size; mobile <audio> needs this to play the
+  // file all the way through without ending early on a chunked EOF).
+  const cached = await fetchCachedChunk(c.env, readingId, section, chunkIdx);
   if (cached) {
-    return new Response(cached.body, { headers: audioHeaders });
+    return new Response(cached.body, { headers: audioHeaders(cached.size) });
   }
 
-  // Cache miss — synthesise via ElevenLabs, tee to R2 in the background.
+  // Cache miss — synth via ElevenLabs non-streaming endpoint. Returns
+  // the full MP3 in one buffer (we set Content-Length on the response).
+  // R2 put runs in the background via waitUntil.
   try {
-    const stream = await synthesizeStream(
+    const bytes = await synthesizeChunk(
       c.env,
       c.executionCtx,
       readingId,
       section,
+      chunkIdx,
       reading.sections,
     );
-    return new Response(stream, { headers: audioHeaders });
+    if (!bytes) {
+      return c.json({ error: "Parça bulunamadı." }, 404);
+    }
+    return new Response(bytes, { headers: audioHeaders(bytes.byteLength) });
   } catch (err) {
-    console.error("[tts] synthesize failed", {
+    console.error("[tts] chunk synth failed", {
       readingId,
       section,
+      chunkIdx,
       err: err instanceof Error ? err.message : String(err),
-      key: ttsKey(readingId, section),
     });
     return c.json({ error: "Müneccim sesi şu an gelmiyor." }, 502);
   }
