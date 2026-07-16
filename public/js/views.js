@@ -590,22 +590,47 @@ async function copyToClipboard(text) {
 // Both paths defeat the "user bounces on mobile and loses everything"
 // failure mode that motivated the entire async refactor.
 function buildEscapeHatch(readingId, isCancelled, initialHasEmail) {
-  const panel = document.createElement("div");
-  panel.className = "loading-escape";
-  // Static structure: intro line + email slot (form OR confirmed text)
-  // + copy-link button + transient status line. The email slot's
-  // contents swap between "ask" and "confirmed" based on state — the
-  // copy-link and status survive across both, so the user can still
-  // copy regardless of email state.
-  panel.innerHTML = `
-    <p class="loading-escape-label"></p>
-    <div class="loading-escape-email-slot"></div>
-    <button type="button" class="loading-escape-copy">↗ Bağlantını kopyala ve sonra kontrol et</button>
-    <p class="loading-escape-status" aria-live="polite"></p>
+  // Container wraps two peers (panel + chip) whose visibility is driven
+  // by data-state on the container. Auto-mounts expanded so first-time
+  // users see the email/copy options; collapse chevron on the panel hides
+  // it to the chip; chip click brings it back. Chip persists in confirmed
+  // state too so the toggle keeps working after email submission.
+  const container = document.createElement("div");
+  container.className = "loading-escape-container";
+  container.dataset.state = "expanded";
+  container.innerHTML = `
+    <div class="loading-escape">
+      <button type="button" class="loading-escape-collapse" aria-label="Küçült">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
+      <p class="loading-escape-label"></p>
+      <div class="loading-escape-email-slot"></div>
+      <button type="button" class="loading-escape-copy">↗ Bağlantını kopyala ve sonra kontrol et</button>
+      <p class="loading-escape-status" aria-live="polite"></p>
+    </div>
+    <button type="button" class="loading-escape-chip" aria-label="E-posta bırakma seçeneğini aç">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="2"/>
+        <path d="M3 7l9 6 9-6"/>
+      </svg>
+    </button>
   `;
+  const panel = container.querySelector(".loading-escape");
+  const chip = container.querySelector(".loading-escape-chip");
   const labelEl = panel.querySelector(".loading-escape-label");
   const slotEl = panel.querySelector(".loading-escape-email-slot");
   const statusEl = panel.querySelector(".loading-escape-status");
+
+  panel
+    .querySelector(".loading-escape-collapse")
+    .addEventListener("click", () => {
+      container.dataset.state = "collapsed";
+    });
+  chip.addEventListener("click", () => {
+    container.dataset.state = "expanded";
+  });
   const setStatus = (msg, tone = "") => {
     if (isCancelled()) return;
     statusEl.textContent = msg;
@@ -672,7 +697,7 @@ function buildEscapeHatch(readingId, isCancelled, initialHasEmail) {
       }
     });
 
-  return panel;
+  return container;
 }
 
 // The shared mystical-loading experience. Mounts the full tpl-loading
