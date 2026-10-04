@@ -78,12 +78,15 @@ This project uses `~/.gizem-creds`.
 
 From `~/.gizem-creds` (machine env): `CLOUDFLARE_API_TOKEN`, `GH_TOKEN` (account: `wandernull`).
 
-Worker secrets (prod via `wrangler secret put`, local via `.dev.vars`) — 6 set in prod:
+Worker secrets (prod via `wrangler secret put`, local via `.dev.vars`) — 7 set in prod (verified 2026-10-04):
 - `ANTHROPIC_API_KEY` — Claude
 - `ELEVENLABS_API_KEY` — TTS
 - `STRIPE_SECRET_KEY` — **live** `sk_live_…` (rotated before go-live)
 - `STRIPE_WEBHOOK_SECRET` — `whsec_…` from the prod webhook endpoint
 - `ADMIN_USER` + `ADMIN_PASS` — HTTP Basic Auth for `/admin*`
+- `RESEND_API_KEY` — outbound email via Resend
+
+Non-secret config lives in `wrangler.toml` `[vars]`: `READING_PRICE_TRY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL_ID`.
 
 Test mode (local `.dev.vars`) uses `sk_test_…` + a `stripe listen` whsec.
 
