@@ -75,12 +75,14 @@ import {
 import {
   LOCKED_SECTION_KEYS,
   TRACK_EVENTS,
+  UNLOCK_SOURCES,
   type Env,
   type FormData,
   type GenerateJob,
   type Promo,
   type Reading,
   type TrackEvent,
+  type UnlockSource,
 } from "./lib/types";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -406,11 +408,18 @@ app.post("/api/track/:id", async (c) => {
   if (typeof event !== "string" || !TRACK_EVENTS.includes(event as TrackEvent)) {
     return c.json({ error: "Bilinmeyen olay." }, 400);
   }
+  // Optional entry-point tag for the unlock events; unknown values → null.
+  const rawSource = (body as { source?: unknown })?.source;
+  const source =
+    typeof rawSource === "string" &&
+    (UNLOCK_SOURCES as readonly string[]).includes(rawSource)
+      ? (rawSource as UnlockSource)
+      : null;
   // No 404 check on reading existence — saves a DB roundtrip per event.
   // If the id doesn't exist, the UPDATE just affects 0 rows. We trade
   // input-validation strictness for tracking throughput.
   try {
-    await markEvent(c.env.DB, id, event as TrackEvent);
+    await markEvent(c.env.DB, id, event as TrackEvent, source);
     return c.json({ ok: true });
   } catch (err) {
     console.warn("[track] mark event failed", { id, event, err });
@@ -1184,6 +1193,8 @@ function renderAdminShell(
     .ai-actions { display: flex; align-items: center; gap: 0.8rem; }
     .ai-status { font-size: 0.78rem; color: var(--dim); }
     /* Costs (migration 0011) */
+    .flag .src { font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
+    .funnel-card { max-width: 640px; margin-bottom: 1.8rem; }
     td.cost { white-space: nowrap; font-size: 0.8rem; text-align: right; font-variant-numeric: tabular-nums; }
     td.cost .dim { color: var(--dim); font-size: 0.74rem; }
     th.cost { text-align: right; }
@@ -1215,6 +1226,74 @@ ${bodyHtml}
 }
 
 // Funnel page body — conversion analytics over all readings.
+const UNLOCK_SOURCE_LABEL: Record<UnlockSource, string> = {
+  devamini_oku: "Devamını oku",
+  unlock_card: "Alt kart",
+  action_bar: "Alt çubuk",
+};
+
+// "Saw the price" cell: ✓ ×N (opens) + first-open entry point.
+function renderOpenedCell(r: Reading): string {
+  if (!r.openedUnlock) return `<td class="flag">${DASH}</td>`;
+  const times = r.openedUnlockCount > 1 ? ` ×${r.openedUnlockCount}` : "";
+  const src = r.openedUnlockSource ? UNLOCK_SOURCE_LABEL[r.openedUnlockSource] : "";
+  return `<td class="flag" title="${esc(src)}">${CHECK}${times}${src ? `<br /><span class="src">${esc(src)}</span>` : ""}</td>`;
+}
+
+// Price-intent funnel over readings created since unlock-intent tracking
+// began (migration 0012) — older rows have no "saw the price" data, so
+// mixing them in would understate every rate. Start = the exact moment of
+// the first recorded modal open (a reading created earlier that day may
+// have reached payment with no open on record, which would break the
+// saw → went → paid chain). readings.created_at is SQLite's
+// "YYYY-MM-DD HH:MM:SS"; opened_unlock_at is ISO — normalise to compare.
+function renderPriceFunnel(readings: Reading[]): string {
+  const firstOpen = readings
+    .map((r) => r.openedUnlockAt)
+    .filter((t): t is string => t != null)
+    .sort()[0];
+  if (!firstOpen) {
+    return `<div class="ops-card funnel-card"><h2>Fiyat hunisi</h2><p class="ops-empty">Henüz fiyat penceresi açılmadı — veri ilk açılışla birlikte başlar.</p></div>`;
+  }
+  const since = firstOpen.slice(0, 19).replace("T", " ");
+  const cohort = readings.filter(
+    (r) => r.status === "done" && r.createdAt.replace("T", " ").slice(0, 19) >= since,
+  );
+  const n = cohort.length;
+  const saw = cohort.filter((r) => r.openedUnlock);
+  const went = cohort.filter((r) => r.clickedUnlock);
+  const paidC = cohort.filter((r) => r.unlocked);
+  const sawNotPaid = saw.filter((r) => !r.unlocked);
+  const rate = (a: number, b: number) => (b === 0 ? "—" : `%${Math.round((a / b) * 100)}`);
+  const avgOpens =
+    sawNotPaid.length === 0
+      ? "—"
+      : (sawNotPaid.reduce((s, r) => s + r.openedUnlockCount, 0) / sawNotPaid.length)
+          .toFixed(1)
+          .replace(".", ",");
+
+  const srcRows = UNLOCK_SOURCES.map((s) => {
+    const opened = cohort.filter((r) => r.openedUnlockSource === s).length;
+    const clicked = cohort.filter((r) => r.clickedUnlockSource === s).length;
+    const paidVia = cohort.filter((r) => r.unlocked && r.clickedUnlockSource === s).length;
+    return `<tr><td>${esc(UNLOCK_SOURCE_LABEL[s])}</td><td class="num">${opened}</td><td class="num">${clicked}</td><td class="num">${paidVia}</td></tr>`;
+  }).join("");
+
+  return `<div class="ops-card funnel-card">
+    <h2>Fiyat hunisi <span class="dim" style="font-weight:400">· ${esc(since.slice(0, 16))} sonrası oluşturulan okumalar</span></h2>
+    <div class="ops-row"><span class="k">Okuma</span><span class="v">${n}</span></div>
+    <div class="ops-row"><span class="k">→ Fiyatı gördü</span><span class="v">${saw.length} <span class="dim">(${rate(saw.length, n)} okumaların)</span></span></div>
+    <div class="ops-row"><span class="k">→ Ödemeye geçti</span><span class="v">${went.length} <span class="dim">(${rate(went.length, saw.length)} fiyatı görenlerin)</span></span></div>
+    <div class="ops-row"><span class="k">→ Ödedi</span><span class="v">${paidC.length} <span class="dim">(${rate(paidC.length, went.length)} ödemeye geçenlerin)</span></span></div>
+    <div class="ops-row"><span class="k">Fiyatı görüp ödemedi</span><span class="v"><strong>${sawNotPaid.length}</strong> <span class="dim">(ort. ${avgOpens} kez açtı)</span></span></div>
+    <table class="ledger" style="margin-top:0.9rem">
+      <thead><tr><th>Giriş noktası</th><th>İlk açılış</th><th>Ödemeye geçiş</th><th>Ödeme</th></tr></thead>
+      <tbody>${srcRows}</tbody>
+    </table>
+    <p class="note">"Fiyatı görüp ödemedi" = indirim/geri kazanım için doğal hedef kitle. "İlk açılış" ilk açan giriş noktasıdır; "Ödemeye geçiş" ödemeye götüren açılışın giriş noktasıdır.</p>
+  </div>`;
+}
+
 function renderFunnelBody(
   readings: Reading[],
   costs: Map<string, CostTotals>,
@@ -1223,6 +1302,7 @@ function renderFunnelBody(
   const scrolled = readings.filter((r) => r.scrolledPastFree).length;
   const listenedFree = readings.filter((r) => r.listenedFree).length;
   const listenedLocked = readings.filter((r) => r.listenedLocked).length;
+  const openedUnlock = readings.filter((r) => r.openedUnlock).length;
   const clickedUnlock = readings.filter((r) => r.clickedUnlock).length;
   const paid = readings.filter((r) => r.unlocked).length;
   const pct = (n: number) => (total === 0 ? "—" : `${Math.round((n / total) * 100)}%`);
@@ -1241,7 +1321,8 @@ function renderFunnelBody(
   <td class="flag">${r.listenedFree ? CHECK : DASH}</td>
   <td class="flag">${r.listenedLocked ? CHECK : DASH}</td>
   <td class="flag">${r.listenedChain ? CHECK : DASH}</td>
-  <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
+  ${renderOpenedCell(r)}
+  <td class="flag" title="${esc(r.clickedUnlockSource ? UNLOCK_SOURCE_LABEL[r.clickedUnlockSource] : "")}">${r.clickedUnlock ? `${CHECK}${r.clickedUnlockSource ? `<br /><span class="src">${esc(UNLOCK_SOURCE_LABEL[r.clickedUnlockSource])}</span>` : ""}` : DASH}</td>
   <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
   ${renderCostCells(r, costs.get(r.id))}
   <td class="id">
@@ -1259,9 +1340,12 @@ function renderFunnelBody(
     <div class="stat"><div class="stat-label">Aşağı kaydırdı</div><div class="stat-value">${esc(String(scrolled))}<span class="stat-pct">${pct(scrolled)}</span></div></div>
     <div class="stat"><div class="stat-label">Karakteri dinledi</div><div class="stat-value">${esc(String(listenedFree))}<span class="stat-pct">${pct(listenedFree)}</span></div></div>
     <div class="stat"><div class="stat-label">Kilitli dinledi</div><div class="stat-value">${esc(String(listenedLocked))}<span class="stat-pct">${pct(listenedLocked)}</span></div></div>
-    <div class="stat"><div class="stat-label">"Mührü kır" tıkladı</div><div class="stat-value">${esc(String(clickedUnlock))}<span class="stat-pct">${pct(clickedUnlock)}</span></div></div>
+    <div class="stat"><div class="stat-label">Fiyatı gördü</div><div class="stat-value">${esc(String(openedUnlock))}<span class="stat-pct">${pct(openedUnlock)}</span></div><div class="stat-sub">takip yeni başladı</div></div>
+    <div class="stat"><div class="stat-label">Ödemeye geçti</div><div class="stat-value">${esc(String(clickedUnlock))}<span class="stat-pct">${pct(clickedUnlock)}</span></div></div>
     <div class="stat"><div class="stat-label">Ödedi</div><div class="stat-value">${esc(String(paid))}<span class="stat-pct">${pct(paid)}</span></div></div>
   </div>
+
+  ${renderPriceFunnel(readings)}
 
   ${total === 0
     ? `<div class="empty">Henüz okuma yok.</div>`
@@ -1278,7 +1362,8 @@ function renderFunnelBody(
         <th>Dinle: Karakter</th>
         <th>Dinle: Kilitli</th>
         <th>Dinle: Hepsi</th>
-        <th>Mührü kır</th>
+        <th title="Fiyat penceresi açıldı (Devamını oku / alt kart / alt çubuk). ×N = kaç kez açıldı.">Fiyatı gördü</th>
+        <th title="Pencerede &quot;Kaderinin tamamını aç&quot; ile Stripe'a gitti (eski adı: Mührü kır)">Ödemeye geçti</th>
         <th>Ödedi</th>
         <th class="cost" title="Her ziyaretçinin maliyeti: Claude (okuma + varsa promosyon e-postası) + ücretsiz önizleme sesi. Döküm: İşlem sayfası.">Ödeme öncesi</th>
         <th class="cost" title="Ödeyen kullanıcının ek maliyeti: kalan 2/3 + 9 kilitli bölüm sesi (kredi × $0.08/1.000)">Ödeme sonrası</th>
@@ -1689,6 +1774,16 @@ function renderOpsBody(
     <h2>${esc(f.name)} <span class="dim" style="color:var(--dim);font-weight:400">· ${esc(reading.id)}</span></h2>
     <div class="ops-row"><span class="k">Oluşturuldu</span><span class="v">${esc(created)}</span></div>
     <div class="ops-row"><span class="k">Durum</span><span class="v">${reading.unlocked ? "Ödendi (açık)" : "Ücretsiz (kilitli)"}</span></div>
+    <div class="ops-row"><span class="k">Fiyatı gördü</span><span class="v">${
+      reading.openedUnlock
+        ? `${reading.openedUnlockCount} kez · ilk ${esc((reading.openedUnlockAt ?? "").replace("T", " ").slice(0, 16))}${reading.openedUnlockSource ? ` · ${esc(UNLOCK_SOURCE_LABEL[reading.openedUnlockSource])}` : ""}`
+        : "—"
+    }</span></div>
+    <div class="ops-row"><span class="k">Ödemeye geçti</span><span class="v">${
+      reading.clickedUnlock
+        ? `${esc((reading.clickedUnlockAt ?? "").replace("T", " ").slice(0, 16))}${reading.clickedUnlockSource ? ` · ${esc(UNLOCK_SOURCE_LABEL[reading.clickedUnlockSource])}` : ""}`
+        : "—"
+    }</span></div>
     <div class="ops-row"><span class="k">Ödeme zamanı</span><span class="v">${esc(paidAt)}</span></div>
     <div class="ops-row"><span class="k">E-posta</span><span class="v">${esc(reading.customerEmail ?? "—")}</span></div>
     <div class="ops-row"><span class="k">Stripe session</span><span class="v">${esc(reading.stripeSessionId ?? "—")}</span></div>

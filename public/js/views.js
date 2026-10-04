@@ -1361,6 +1361,21 @@ const PAYMENT_CTA_LABEL = "Kaderinin tamamını aç →";
 const LISTEN_IDLE = "▶ Baştan Sona Dinle";
 const LISTEN_PLAYING = "⏸ Sesi Durdur";
 
+// List price for GA4 begin_checkout's `value` (single-tier pricing; keep in
+// sync with READING_PRICE_TRY in wrangler.toml and the "349,99 ₺" labels).
+const UNLOCK_LIST_PRICE_TRY = 349.99;
+
+// Fire-and-forget GA4 event. window.gtag is always defined (inline <head>
+// snippet) but only reaches Google on prod / ga4_debug, and stays silent
+// for admin browsers. Analytics must never break the unlock flow.
+function ga4Event(name, params) {
+  try {
+    if (typeof window.gtag === "function") window.gtag("event", name, params);
+  } catch {
+    /* ignore */
+  }
+}
+
 // Shared unlock flow. Reached via the reveal modal's CTA, which every
 // unlock entry point (unlock card, sticky, inline "Devamını oku") opens.
 // Calls /api/unlock which now returns a
@@ -1371,11 +1386,22 @@ const LISTEN_PLAYING = "⏸ Sesi Durdur";
 // Idempotent on already-paid readings: server returns { alreadyUnlocked:
 // true } in which case we just refresh the page so the unlocked state
 // renders.
-async function performUnlock(id, router, btn, errEl, restoreLabel) {
+async function performUnlock(id, router, btn, errEl, restoreLabel, source) {
   // Funnel tracking — fire-and-forget. `keepalive: true` on the fetch
   // ensures the request lands even though we're about to navigate away
   // to Stripe Checkout. Doesn't block the unlock flow on failure.
-  api.trackEvent(id, "clicked_unlock");
+  // `source` = the entry point that opened the modal this click came from.
+  api.trackEvent(id, "clicked_unlock", source);
+  // GA4: the recommended ecommerce `begin_checkout` (so GA4's standard
+  // checkout reports pick it up). value = list price — a promo code, if
+  // any, is entered later on the Stripe page; the real paid amount lands
+  // on report_unlocked. gtag sends via sendBeacon, so it survives the
+  // redirect to Stripe below.
+  ga4Event("begin_checkout", {
+    currency: "TRY",
+    value: UNLOCK_LIST_PRICE_TRY,
+    source: source || "unknown",
+  });
   btn.disabled = true;
   btn.textContent = "Ödeme sayfasına yönlendiriliyor…";
   if (errEl) errEl.hidden = true;
@@ -1415,8 +1441,19 @@ function wireUnlockModal({ root, id, router, disposables }) {
   const modalError = root.querySelector(".unlock-modal-error");
   if (!modal || !modalCta) return () => {};
 
+  // Which entry point opened the modal currently showing — tagged onto
+  // the opened_unlock event and carried through to clicked_unlock so the
+  // admin funnel can tell which surface shows the price vs. converts.
+  let openSource = null;
+
   // Open in a clean state — clear any error/loading from a prior attempt.
-  const openModal = () => {
+  // `source`: 'devamini_oku' | 'unlock_card' | 'action_bar'.
+  const openModal = (source) => {
+    openSource = typeof source === "string" ? source : null;
+    api.trackEvent(id, "opened_unlock", openSource);
+    // GA4 mirror of opened_unlock: every open ("saw the price"), tagged
+    // with the entry point. Not deduped — repeat opens are the signal.
+    ga4Event("unlock_opened", { source: openSource || "unknown" });
     if (modalError) modalError.hidden = true;
     modalCta.disabled = false;
     modalCta.textContent = PAYMENT_CTA_LABEL;
@@ -1428,13 +1465,15 @@ function wireUnlockModal({ root, id, router, disposables }) {
   for (const btn of root.querySelectorAll(
     ".unlock-card .btn-gold-fill, .devamini-oku-inline",
   )) {
-    btn.addEventListener("click", openModal);
+    const isInline = btn.classList.contains("devamini-oku-inline");
+    const source = isInline ? "devamini_oku" : "unlock_card";
+    btn.addEventListener("click", () => openModal(source));
     // Inline link is an <a> without href → add Enter/Space activation.
-    if (btn.classList.contains("devamini-oku-inline")) {
+    if (isInline) {
       btn.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") {
           ev.preventDefault();
-          openModal();
+          openModal(source);
         }
       });
     }
@@ -1448,7 +1487,7 @@ function wireUnlockModal({ root, id, router, disposables }) {
 
   // CTA → actual unlock.
   modalCta.addEventListener("click", () => {
-    performUnlock(id, router, modalCta, modalError, PAYMENT_CTA_LABEL);
+    performUnlock(id, router, modalCta, modalError, PAYMENT_CTA_LABEL, openSource);
   });
 
   disposables.push(() => {
@@ -2009,7 +2048,7 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         barPdf.hidden = true;
         barFeedback.hidden = true;
         const openUnlockModal = wireUnlockModal({ root, id, router, disposables });
-        barPrimary.addEventListener("click", openUnlockModal);
+        barPrimary.addEventListener("click", () => openUnlockModal("action_bar"));
       } else {
         // Paid: the primary pill IS the chain "Baştan Sona Dinle" button.
         const listenBtn = barPrimary;

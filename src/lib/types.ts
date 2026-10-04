@@ -66,10 +66,16 @@ export const TRACK_EVENTS = [
   "listened_locked",
   "listened_chain",
   "clicked_unlock",
+  "opened_unlock",
   "viewed_feedback_cta",
   "clicked_feedback_cta",
 ] as const;
 export type TrackEvent = (typeof TRACK_EVENTS)[number];
+
+// Which unlock entry point opened the price modal (migration 0012). Sent
+// with opened_unlock and clicked_unlock; anything else is stored as NULL.
+export const UNLOCK_SOURCES = ["devamini_oku", "unlock_card", "action_bar"] as const;
+export type UnlockSource = (typeof UNLOCK_SOURCES)[number];
 
 export interface Reading {
   id: string;
@@ -123,6 +129,14 @@ export interface Reading {
   listenedChain: boolean;
   clickedUnlock: boolean;
   clickedUnlockAt: string | null;
+  // Unlock intent (migration 0012): the price modal was opened (any entry
+  // point), how often, first-open source, and the source of the open that
+  // led to the go-to-Stripe click. Null/0 on rows before 0012.
+  openedUnlock: boolean;
+  openedUnlockAt: string | null;
+  openedUnlockCount: number;
+  openedUnlockSource: UnlockSource | null;
+  clickedUnlockSource: UnlockSource | null;
   // Rate + feedback (migration 0006). Paid-only — populated via
   // POST /api/feedback/:id. feedbackAt's presence is the "already gave
   // feedback" flag the sticky CTA checks. viewed/clicked are funnel flags.

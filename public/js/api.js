@@ -75,14 +75,15 @@ export function ttsChunkUrl(readingId, section, chunkIdx) {
 // event are no-ops server-side (idempotent flags).
 //
 // Valid events: 'scrolled_past_free', 'listened_free', 'listened_locked',
-// 'listened_chain', 'clicked_unlock', 'viewed_feedback_cta',
-// 'clicked_feedback_cta'.
-export function trackEvent(readingId, event) {
+// 'listened_chain', 'clicked_unlock', 'opened_unlock', 'viewed_feedback_cta',
+// 'clicked_feedback_cta'. `source` (optional) tags the unlock events with
+// the entry point: 'devamini_oku' | 'unlock_card' | 'action_bar'.
+export function trackEvent(readingId, event, source) {
   if (!readingId) return Promise.resolve(null);
   return fetch(`/api/track/${encodeURIComponent(readingId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ event }),
+    body: JSON.stringify(source ? { event, source } : { event }),
     // Keepalive ensures the request survives a page navigation (e.g. user
     // clicks "Mührü kır" — we want the click event to land before the
     // browser redirects to Stripe).

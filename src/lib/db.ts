@@ -4,8 +4,10 @@ import type {
   Reading,
   ReadingStatus,
   TrackEvent,
+  UnlockSource,
   YildiznameSections,
 } from "./types";
+import { UNLOCK_SOURCES } from "./types";
 
 interface ReadingRow {
   id: string;
@@ -38,6 +40,11 @@ interface ReadingRow {
   listened_chain: number;
   clicked_unlock: number;
   clicked_unlock_at: string | null;
+  opened_unlock: number;
+  opened_unlock_at: string | null;
+  opened_unlock_count: number;
+  opened_unlock_source: string | null;
+  clicked_unlock_source: string | null;
   feedback_rating: number | null;
   feedback_text: string | null;
   feedback_at: string | null;
@@ -55,9 +62,17 @@ const READING_COLUMNS = `
   viewer_ip, client_kind,
   scrolled_past_free, listened_free, listened_locked,
   listened_chain, clicked_unlock, clicked_unlock_at,
+  opened_unlock, opened_unlock_at, opened_unlock_count,
+  opened_unlock_source, clicked_unlock_source,
   feedback_rating, feedback_text, feedback_at,
   viewed_feedback_cta, clicked_feedback_cta
 `;
+
+function asUnlockSource(v: string | null): UnlockSource | null {
+  return v != null && (UNLOCK_SOURCES as readonly string[]).includes(v)
+    ? (v as UnlockSource)
+    : null;
+}
 
 function rowToReading(row: ReadingRow): Reading {
   let sections: YildiznameSections | null = null;
@@ -104,6 +119,11 @@ function rowToReading(row: ReadingRow): Reading {
     listenedChain: row.listened_chain === 1,
     clickedUnlock: row.clicked_unlock === 1,
     clickedUnlockAt: row.clicked_unlock_at,
+    openedUnlock: row.opened_unlock === 1,
+    openedUnlockAt: row.opened_unlock_at,
+    openedUnlockCount: row.opened_unlock_count ?? 0,
+    openedUnlockSource: asUnlockSource(row.opened_unlock_source),
+    clickedUnlockSource: asUnlockSource(row.clicked_unlock_source),
     feedbackRating: row.feedback_rating,
     feedbackText: row.feedback_text,
     feedbackAt: row.feedback_at,
@@ -224,20 +244,40 @@ export async function captureClientKind(
 // Flip a funnel-event flag to 1. Idempotent — if already 1, no-op.
 // For `clicked_unlock`, also stamps clicked_unlock_at on the first hit
 // so we can compute time-to-click later if useful.
+// `opened_unlock` is the one counted event: every open increments
+// opened_unlock_count (repeat opens = price hesitation), while the
+// timestamp and source keep the FIRST open. `source` (which entry point
+// opened the modal) is first-write-wins for both unlock events.
 export async function markEvent(
   db: D1Database,
   id: string,
   event: TrackEvent,
+  source: UnlockSource | null = null,
 ): Promise<void> {
   if (event === "clicked_unlock") {
     await db
       .prepare(
         `UPDATE readings
             SET clicked_unlock = 1,
-                clicked_unlock_at = COALESCE(clicked_unlock_at, ?)
+                clicked_unlock_at = COALESCE(clicked_unlock_at, ?),
+                clicked_unlock_source = COALESCE(clicked_unlock_source, ?)
           WHERE id = ?`,
       )
-      .bind(new Date().toISOString(), id)
+      .bind(new Date().toISOString(), source, id)
+      .run();
+    return;
+  }
+  if (event === "opened_unlock") {
+    await db
+      .prepare(
+        `UPDATE readings
+            SET opened_unlock = 1,
+                opened_unlock_count = opened_unlock_count + 1,
+                opened_unlock_at = COALESCE(opened_unlock_at, ?),
+                opened_unlock_source = COALESCE(opened_unlock_source, ?)
+          WHERE id = ?`,
+      )
+      .bind(new Date().toISOString(), source, id)
       .run();
     return;
   }
@@ -251,6 +291,7 @@ export async function markEvent(
     listened_locked: "listened_locked",
     listened_chain: "listened_chain",
     clicked_unlock: "clicked_unlock",
+    opened_unlock: "opened_unlock",
     viewed_feedback_cta: "viewed_feedback_cta",
     clicked_feedback_cta: "clicked_feedback_cta",
   };

@@ -45,7 +45,8 @@ migrations_dir = "migrations"
 # for Number() parsing on the server; UI strings render this as "349,99 ₺"
 # with the Turkish comma convention. If you change this value, also update
 # the literal "349,99 ₺" in public/js/views.js (makePaymentBlock label +
-# the unlock modal price element) and public/sss.html.
+# the unlock modal price element), UNLOCK_LIST_PRICE_TRY in views.js (GA4
+# begin_checkout value) and public/sss.html.
 READING_PRICE_TRY = "349.99"
 # Stock ElevenLabs voice — deep male, decent Turkish. Swap by changing this
 # constant; nothing else needs to move. Will be replaced with a cloned
