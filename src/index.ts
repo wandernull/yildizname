@@ -19,20 +19,47 @@ import {
   markReadingPaid,
   resetPaymentForAdmin,
   setCustomerEmail,
+  setStripeFinancials,
   submitFeedback,
 } from "./lib/db";
-import { generateYildizname } from "./lib/llm";
+import { generateYildizname, LLM_MODEL } from "./lib/llm";
+import {
+  ANTHROPIC_BILLING_URL,
+  ELEVENLABS_BILLING_URL,
+  fetchElevenLabsAccount,
+  fmtInt,
+  fmtTry,
+  fmtUsdMicros,
+  getAvgCreditsPerPaidListen,
+  getCostTotalsByReading,
+  getCostTotalsSince,
+  getFirstCostAt,
+  getFxRate,
+  getFxRateForDate,
+  listCostsForReading,
+  recordAnthropicCost,
+  recordElevenLabsCost,
+  summarizeLedger,
+  usdOfCredits,
+  type CostLedgerRow,
+  type CostTotals,
+  type ElevenLabsAccount,
+  type FxRate,
+} from "./lib/costs";
 import {
   createCheckoutSession,
   createPromo,
   createStripeCustomer,
   fetchInvoiceMetadata,
+  fetchPaymentFinancials,
   fetchPromoRedemptions,
   fetchSessionEmail,
+  fetchSessionTotals,
   verifyStripeSignature,
 } from "./lib/stripe";
 import {
   buildPromoEmailDefaults,
+  EMAIL_MODEL,
   generatePromoEmail,
   plainTextToHtml,
   sendEmail,
@@ -559,7 +586,10 @@ app.post("/api/stripe/webhook", async (c) => {
         // both `amount_total` and `discounts` are included in the webhook
         // payload by default (no `expand` needed).
         amount_total?: number | null;
-        total_details?: { amount_discount?: number | null } | null;
+        total_details?: {
+          amount_discount?: number | null;
+          amount_tax?: number | null;
+        } | null;
         discounts?: Array<{ promotion_code?: string | null }> | null;
       }
     | undefined;
@@ -626,6 +656,33 @@ app.post("/api/stripe/webhook", async (c) => {
     console.warn("[webhook] reading not found", readingId);
     // Still ack — TTL expiry or a deleted row. Don't make Stripe retry.
     return c.json({ ok: true, warning: "reading not in D1" });
+  }
+
+  // Stripe side of the margin (migration 0011): VAT from the session
+  // payload, processing fee + net from the payment's balance transaction,
+  // and the day's USD/TRY snapshot. Best-effort — the unlock above is
+  // already committed; a miss here is backfillable from the Ops page.
+  try {
+    const financials = session?.payment_intent
+      ? await fetchPaymentFinancials(c.env, session.payment_intent)
+      : null;
+    const fx = await getFxRate(c.env.DB);
+    await setStripeFinancials(c.env.DB, readingId, {
+      amountTaxKurus:
+        typeof session?.total_details?.amount_tax === "number"
+          ? session.total_details.amount_tax
+          : null,
+      stripeFeeMinor: financials?.feeMinor ?? null,
+      stripeNetMinor: financials?.netMinor ?? null,
+      stripeSettlementCurrency: financials?.currency ?? null,
+      stripeExchangeRate: financials?.exchangeRate ?? null,
+      usdTryAtPayment: fx?.usdTry ?? null,
+    });
+  } catch (err) {
+    console.warn("[webhook] stripe financials capture failed", {
+      readingId,
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 
   console.log("[webhook] reading unlocked", {
@@ -703,7 +760,7 @@ app.get("/api/tts/:readingId/:section/:chunkIdx", async (c) => {
   // the full MP3 in one buffer (we set Content-Length on the response).
   // R2 put runs in the background via waitUntil.
   try {
-    const bytes = await synthesizeChunk(
+    const synth = await synthesizeChunk(
       c.env,
       c.executionCtx,
       readingId,
@@ -711,10 +768,24 @@ app.get("/api/tts/:readingId/:section/:chunkIdx", async (c) => {
       chunkIdx,
       reading.sections,
     );
-    if (!bytes) {
+    if (!synth) {
       return c.json({ error: "Parça bulunamadı." }, 404);
     }
-    return new Response(bytes, { headers: audioHeaders(bytes.byteLength) });
+    // Cost ledger: the exact credits ElevenLabs charged for this chunk.
+    // Cache hits above never reach here, so only real synths are logged.
+    c.executionCtx.waitUntil(
+      recordElevenLabsCost(c.env.DB, {
+        readingId,
+        section,
+        chunkIdx,
+        model: c.env.ELEVENLABS_MODEL_ID,
+        textChars: synth.textChars,
+        credits: synth.credits,
+      }),
+    );
+    return new Response(synth.bytes, {
+      headers: audioHeaders(synth.bytes.byteLength),
+    });
   } catch (err) {
     console.error("[tts] chunk synth failed", {
       readingId,
@@ -870,11 +941,126 @@ function renderEmailCell(r: Reading): string {
   }</td>`;
 }
 
+// ----- Cost / margin helpers (migration 0011) ---------------------------------
+// Everything here is derived from stored, vendor-reported numbers:
+// revenue/VAT/fee from Stripe, Claude cost from token usage × official
+// price, audio from ElevenLabs credits. A null anywhere means "not
+// captured" and propagates to "—" rather than being guessed.
+
+interface ReadingEconomics {
+  priceTry: number | null; // what the customer paid, VAT included (after any promo)
+  revenueNetTry: number | null; // amount_total − VAT
+  feeTry: number | null; // Stripe fee converted with Stripe's own rate
+  claudeTry: number | null;
+  claudeUsdMicros: number | null;
+  audioTry: number | null;
+  audioUsdMicros: number | null;
+  marginTry: number | null;
+  marginUsdMicros: number | null;
+  // Profit as a share of the selling price (VAT incl.) — "of every ₺ the
+  // customer paid, how much do we keep".
+  marginPct: number | null;
+}
+
+function stripeFeeTry(r: Reading): number | null {
+  if (r.stripeFeeMinor == null || !r.stripeSettlementCurrency) return null;
+  const fee = r.stripeFeeMinor / 100;
+  if (r.stripeSettlementCurrency.toLowerCase() === "try") return fee;
+  // exchange_rate: TRY × rate = settlement amount → settlement ÷ rate = TRY.
+  return r.stripeExchangeRate ? fee / r.stripeExchangeRate : null;
+}
+
+function readingEconomics(r: Reading, t: CostTotals | undefined): ReadingEconomics {
+  const revenueNetTry =
+    r.unlocked && r.amountTotalKurus != null && r.amountTaxKurus != null
+      ? (r.amountTotalKurus - r.amountTaxKurus) / 100
+      : null;
+  const feeTry = r.unlocked ? stripeFeeTry(r) : null;
+  const claudeTry = t ? t.claudeTry : null;
+  const audioTry = t ? t.audioTry : null;
+  let marginTry: number | null = null;
+  let marginUsdMicros: number | null = null;
+  if (revenueNetTry != null && feeTry != null && claudeTry != null && audioTry != null) {
+    marginTry = revenueNetTry - feeTry - claudeTry - audioTry;
+    if (r.usdTryAtPayment) {
+      const revenueFeeUsdMicros = ((revenueNetTry - feeTry) / r.usdTryAtPayment) * 1_000_000;
+      marginUsdMicros = Math.round(
+        revenueFeeUsdMicros - (t?.claudeUsdMicros ?? 0) - (t?.audioUsdMicros ?? 0),
+      );
+    }
+  }
+  const priceTry = r.unlocked && r.amountTotalKurus != null ? r.amountTotalKurus / 100 : null;
+  return {
+    priceTry,
+    revenueNetTry,
+    feeTry,
+    claudeTry,
+    claudeUsdMicros: t ? t.claudeUsdMicros : null,
+    audioTry,
+    audioUsdMicros: t ? t.audioUsdMicros : null,
+    marginTry,
+    marginUsdMicros,
+    marginPct: marginTry != null && priceTry ? (marginTry / priceTry) * 100 : null,
+  };
+}
+
+function fmtPct(p: number | null): string {
+  if (p == null) return "—";
+  return `%${p.toFixed(1).replace(".", ",")}`.replace("%-", "−%");
+}
+
+// "$0.142 · ₺6,98" — USD and TRY side by side for transparency. Either
+// side shows "—" when not captured.
+function renderMoney(usdMicros: number | null, tryAmount: number | null): string {
+  const usd = usdMicros == null ? "—" : fmtUsdMicros(usdMicros);
+  const tl = tryAmount == null ? "—" : fmtTry(tryAmount);
+  return `<span class="money">${usd}</span><br /><span class="dim">${tl}</span>`;
+}
+
+// TRY-native amounts (revenue, fees) shown with their USD equivalent at
+// the payment-day snapshot rate.
+function renderTryMoney(tryAmount: number | null, usdTry: number | null): string {
+  if (tryAmount == null) return `<span class="dim">—</span>`;
+  const usd = usdTry ? fmtUsdMicros(Math.round((tryAmount / usdTry) * 1_000_000)) : "—";
+  return `<span class="money">${fmtTry(tryAmount)}</span><br /><span class="dim">${usd}</span>`;
+}
+
+// Cost split by funnel stage. Before payment = what every visitor costs
+// (Claude generation + any promo email + free-preview audio); after
+// payment = what a buyer costs on top (paid audio). TRY is null if any
+// contributing row lacks an fx snapshot.
+interface StageCost {
+  usdMicros: number;
+  tryAmount: number | null;
+}
+function costStages(t: CostTotals): { before: StageCost; after: StageCost; total: StageCost } {
+  const before: StageCost = {
+    usdMicros: t.claudeUsdMicros + usdOfCredits(t.freeCredits),
+    tryAmount: t.claudeTry == null || t.freeTry == null ? null : t.claudeTry + t.freeTry,
+  };
+  const after: StageCost = { usdMicros: usdOfCredits(t.paidCredits), tryAmount: t.paidTry };
+  return {
+    before,
+    after,
+    total: {
+      usdMicros: before.usdMicros + after.usdMicros,
+      tryAmount:
+        before.tryAmount == null || after.tryAmount == null
+          ? null
+          : before.tryAmount + after.tryAmount,
+    },
+  };
+}
+function fmtStage(s: StageCost): string {
+  return `${fmtUsdMicros(s.usdMicros)} · ${s.tryAmount == null ? "—" : fmtTry(s.tryAmount)}`;
+}
+
+
 // Shared HTML scaffold: head + CSS + tab nav. activeTab highlights the
 // current page. Both admin pages render their body through this so the
 // styling + nav stay in lockstep.
 function renderAdminShell(
-  activeTab: "funnel" | "ratings" | "ops",
+  activeTab: "funnel" | "ratings" | "ops" | "credits",
   bodyHtml: string,
 ): string {
   const tab = (href: string, label: string, key: string) =>
@@ -997,6 +1183,22 @@ function renderAdminShell(
     .ai-feedback-toggle input[type="checkbox"] { width: auto; margin: 0; }
     .ai-actions { display: flex; align-items: center; gap: 0.8rem; }
     .ai-status { font-size: 0.78rem; color: var(--dim); }
+    /* Costs (migration 0011) */
+    td.cost { white-space: nowrap; font-size: 0.8rem; text-align: right; font-variant-numeric: tabular-nums; }
+    td.cost .dim { color: var(--dim); font-size: 0.74rem; }
+    th.cost { text-align: right; }
+    .money { color: var(--fg); }
+    .neg { color: #e07a7a; }
+    .credit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.2rem; margin-bottom: 1.6rem; }
+    .credit-grid .ops-card { max-width: none; margin-bottom: 0; }
+    .ops-card .note { color: var(--dim); font-size: 0.78rem; margin: 0.8rem 0 0; line-height: 1.45; }
+    .ops-card a { color: var(--gold); }
+    .bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); overflow: hidden; margin: 0.4rem 0 0.8rem; }
+    .bar > span { display: block; height: 100%; background: var(--gold); }
+    table.ledger { font-size: 0.8rem; margin-top: 0.6rem; }
+    table.ledger td, table.ledger th { padding: 0.4rem 0.4rem; }
+    table.ledger td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .ledger-wrap { max-width: 960px; overflow-x: auto; margin-bottom: 1.4rem; }
   </style>
 </head>
 <body>
@@ -1005,6 +1207,7 @@ function renderAdminShell(
     ${tab("/admin", "Funnel", "funnel")}
     ${tab("/admin/ratings", "Puanlar", "ratings")}
     ${tab("/admin/ops", "İşlemler", "ops")}
+    ${tab("/admin/credits", "Krediler", "credits")}
   </nav>
 ${bodyHtml}
 </body>
@@ -1012,7 +1215,10 @@ ${bodyHtml}
 }
 
 // Funnel page body — conversion analytics over all readings.
-function renderFunnelBody(readings: Reading[]): string {
+function renderFunnelBody(
+  readings: Reading[],
+  costs: Map<string, CostTotals>,
+): string {
   const total = readings.length;
   const scrolled = readings.filter((r) => r.scrolledPastFree).length;
   const listenedFree = readings.filter((r) => r.listenedFree).length;
@@ -1037,6 +1243,7 @@ function renderFunnelBody(readings: Reading[]): string {
   <td class="flag">${r.listenedChain ? CHECK : DASH}</td>
   <td class="flag">${r.clickedUnlock ? CHECK : DASH}</td>
   <td class="flag ${r.unlocked ? "paid" : ""}">${r.unlocked ? CHECK : DASH}</td>
+  ${renderCostCells(r, costs.get(r.id))}
   <td class="id">
     <a href="/okuma/${esc(r.id)}" target="_blank">aç →</a><br />
     <a class="ops-link" href="/admin/ops?id=${esc(r.id)}">işlem →</a>
@@ -1045,7 +1252,7 @@ function renderFunnelBody(readings: Reading[]): string {
     })
     .join("\n");
 
-  return `  <p class="meta">Son ${esc(String(total))} okuma. Yenilemek için sayfayı yenile.</p>
+  return `  <p class="meta">Son ${esc(String(total))} okuma. Yenilemek için sayfayı yenile. Maliyet sütunları yalnızca takip başladıktan sonraki çağrıları içerir (öncesi "—").</p>
 
   <div class="stats">
     <div class="stat"><div class="stat-label">Toplam</div><div class="stat-value">${esc(String(total))}</div></div>
@@ -1073,6 +1280,14 @@ function renderFunnelBody(readings: Reading[]): string {
         <th>Dinle: Hepsi</th>
         <th>Mührü kır</th>
         <th>Ödedi</th>
+        <th class="cost" title="Her ziyaretçinin maliyeti: Claude (okuma + varsa promosyon e-postası) + ücretsiz önizleme sesi. Döküm: İşlem sayfası.">Ödeme öncesi</th>
+        <th class="cost" title="Ödeyen kullanıcının ek maliyeti: kalan 2/3 + 9 kilitli bölüm sesi (kredi × $0.08/1.000)">Ödeme sonrası</th>
+        <th class="cost" title="Ödeme öncesi + ödeme sonrası">Toplam maliyet</th>
+        <th class="cost" title="Müşterinin ödediği tutar (KDV dahil, varsa promosyon sonrası)">Satış fiyatı</th>
+        <th class="cost" title="Ödenen tutar − KDV">Gelir (net)</th>
+        <th class="cost" title="Stripe işlem ücreti (Stripe'ın kendi kuruyla TL'ye çevrilmiş)">Stripe</th>
+        <th class="cost" title="${esc(MARGIN_TITLE)}">Kâr</th>
+        <th class="cost" title="Kâr ÷ satış fiyatı (KDV dahil)">Kâr %</th>
         <th></th>
       </tr>
     </thead>
@@ -1080,6 +1295,251 @@ function renderFunnelBody(readings: Reading[]): string {
 ${rows}
     </tbody>
   </table>`}`;
+}
+
+const MARGIN_TITLE =
+  "Net gelir (KDV hariç) − Stripe ücreti − Claude − ses. Ses: ElevenLabs faturalı karakter (kredi) × yayınlanan fiyat ($0.08 / 1.000).";
+
+function renderCostCells(r: Reading, t: CostTotals | undefined): string {
+  const e = readingEconomics(r, t);
+  const marginCls = e.marginTry != null && e.marginTry < 0 ? " neg" : "";
+  if (!t) {
+    const none = `<td class="cost"><span class="dim">—</span></td>`;
+    return `${none}${none}${none}
+  <td class="cost">${r.unlocked ? renderTryMoney(e.priceTry, r.usdTryAtPayment) : `<span class="dim">—</span>`}</td>
+  <td class="cost">${r.unlocked ? renderTryMoney(e.revenueNetTry, r.usdTryAtPayment) : `<span class="dim">—</span>`}</td>
+  <td class="cost">${r.unlocked ? renderTryMoney(e.feeTry, r.usdTryAtPayment) : `<span class="dim">—</span>`}</td>
+  ${none}${none}`;
+  }
+  const s = costStages(t);
+  return `<td class="cost">${renderMoney(s.before.usdMicros, s.before.tryAmount)}</td>
+  <td class="cost">${t.paidCredits > 0 ? renderMoney(s.after.usdMicros, s.after.tryAmount) : `<span class="dim">—</span>`}</td>
+  <td class="cost"><strong>${renderMoney(s.total.usdMicros, s.total.tryAmount)}</strong></td>
+  <td class="cost">${r.unlocked ? renderTryMoney(e.priceTry, r.usdTryAtPayment) : `<span class="dim">—</span>`}</td>
+  <td class="cost">${r.unlocked ? renderTryMoney(e.revenueNetTry, r.usdTryAtPayment) : `<span class="dim">—</span>`}</td>
+  <td class="cost">${r.unlocked ? renderTryMoney(e.feeTry, r.usdTryAtPayment) : `<span class="dim">—</span>`}</td>
+  <td class="cost${marginCls}">${e.marginTry != null ? renderMoney(e.marginUsdMicros, e.marginTry) : `<span class="dim">—</span>`}</td>
+  <td class="cost${marginCls}">${e.marginPct != null ? `<strong>${fmtPct(e.marginPct)}</strong>` : `<span class="dim">—</span>`}</td>`;
+}
+
+const COST_KIND_LABEL: Record<string, string> = {
+  generation: "Okuma (Claude)",
+  free_audio: "Ses: ücretsiz",
+  paid_audio: "Ses: ücretli",
+  promo_email: "Promosyon e-postası (Claude)",
+};
+
+// Ops page: economics summary + the full call ledger for one reading.
+function renderCostSection(
+  r: Reading,
+  ledger: CostLedgerRow[],
+  t: CostTotals | undefined,
+): string {
+  const e = readingEconomics(r, t);
+  const rowsHtml = ledger
+    .map((c) => {
+      const what =
+        c.provider === "anthropic"
+          ? `${fmtInt(c.inputTokens ?? 0)} girdi · ${fmtInt(c.outputTokens ?? 0)} çıktı token` +
+            (c.cacheReadInputTokens ? ` · ${fmtInt(c.cacheReadInputTokens)} cache` : "")
+          : `${fmtInt(c.textChars ?? 0)} karakter`;
+      const where =
+        c.kind === "generation"
+          ? `deneme ${c.queueAttempt ?? "?"}.${c.attempt ?? "?"} · ${esc(c.outcome ?? "")}`
+          : c.section
+            ? `${esc(c.section)} #${c.chunkIdx ?? "?"}`
+            : "";
+      const cost =
+        c.provider === "elevenlabs"
+          ? c.costUsdMicros == null
+            ? "? kredi"
+            : `${fmtUsdMicros(c.costUsdMicros)}` +
+              (c.usdTry ? ` · ${fmtTry((c.costUsdMicros / 1_000_000) * c.usdTry)}` : "") +
+              ` <span class="dim">(${fmtInt(c.credits ?? 0)} kredi)</span>`
+          : c.costUsdMicros == null
+            ? "?"
+            : `${fmtUsdMicros(c.costUsdMicros)}` +
+              (c.usdTry ? ` · ${fmtTry((c.costUsdMicros / 1_000_000) * c.usdTry)}` : "");
+      return `<tr>
+        <td class="when">${esc(c.createdAt.replace("T", " ").slice(0, 19))}</td>
+        <td>${esc(COST_KIND_LABEL[c.kind] ?? c.kind)}</td>
+        <td class="dim">${where}</td>
+        <td class="num">${what}</td>
+        <td class="num">${cost}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const summary = `
+  <div class="ops-card">
+    <h2>Maliyet</h2>
+    ${
+      t
+        ? (() => {
+            const s = costStages(t);
+            return `<div class="ops-row"><span class="k"><strong>Ödeme öncesi</strong></span><span class="v"><strong>${fmtStage(s.before)}</strong></span></div>
+    <div class="ops-row"><span class="k">&nbsp;&nbsp;· Claude</span><span class="v">${fmtUsdMicros(t.claudeUsdMicros)} · ${t.claudeTry == null ? "—" : fmtTry(t.claudeTry)}</span></div>
+    <div class="ops-row"><span class="k">&nbsp;&nbsp;· Ses: ücretsiz önizleme</span><span class="v">${fmtUsdMicros(usdOfCredits(t.freeCredits))} · ${t.freeTry == null ? "—" : fmtTry(t.freeTry)} <span class="dim">(${fmtInt(t.freeCredits)} kredi)</span></span></div>
+    <div class="ops-row"><span class="k"><strong>Ödeme sonrası</strong></span><span class="v"><strong>${fmtStage(s.after)}</strong></span></div>
+    <div class="ops-row"><span class="k">&nbsp;&nbsp;· Ses: ücretli bölümler</span><span class="v">${fmtUsdMicros(usdOfCredits(t.paidCredits))} · ${t.paidTry == null ? "—" : fmtTry(t.paidTry)} <span class="dim">(${fmtInt(t.paidCredits)} kredi)</span></span></div>
+    <div class="ops-row"><span class="k"><strong>Toplam maliyet</strong></span><span class="v"><strong>${fmtStage(s.total)}</strong></span></div>`;
+          })()
+        : `<div class="ops-row"><span class="k">Maliyet</span><span class="v">takip edilmedi</span></div>`
+    }
+    ${
+      r.unlocked
+        ? `<div class="ops-row"><span class="k"><strong>Satış fiyatı (KDV dahil)</strong></span><span class="v">${r.amountTotalKurus == null ? "—" : fmtTry(r.amountTotalKurus / 100)}</span></div>
+    <div class="ops-row"><span class="k">KDV</span><span class="v">${r.amountTaxKurus == null ? "—" : fmtTry(r.amountTaxKurus / 100)}</span></div>
+    <div class="ops-row"><span class="k">Stripe ücreti</span><span class="v">${
+      r.stripeFeeMinor == null
+        ? "—"
+        : `${(r.stripeFeeMinor / 100).toFixed(2)} ${esc((r.stripeSettlementCurrency ?? "").toUpperCase())}${e.feeTry != null ? ` · ${fmtTry(e.feeTry)}` : ""}`
+    }</span></div>
+    <div class="ops-row"><span class="k">Stripe net (ödemeye geçen)</span><span class="v">${
+      r.stripeNetMinor == null
+        ? "—"
+        : `${(r.stripeNetMinor / 100).toFixed(2)} ${esc((r.stripeSettlementCurrency ?? "").toUpperCase())}`
+    }</span></div>
+    <div class="ops-row"><span class="k"><strong>Kâr</strong></span><span class="v"><strong>${
+      e.marginTry == null
+        ? "—"
+        : `${e.marginUsdMicros == null ? "—" : fmtUsdMicros(e.marginUsdMicros)} · ${fmtTry(e.marginTry)}`
+    }</strong></span></div>
+    <div class="ops-row"><span class="k"><strong>Kâr %</strong> <span class="dim">(kâr ÷ satış fiyatı)</span></span><span class="v"><strong>${fmtPct(e.marginPct)}</strong></span></div>`
+        : ""
+    }
+    <p class="note">${esc(MARGIN_TITLE)} Kur: her satır kendi gününün USD/TRY kuruyla; Stripe ücreti Stripe'ın kendi kuruyla çevrilir.</p>
+  </div>`;
+
+  const syncForm =
+    r.unlocked && r.stripeSessionId
+      ? `
+  <form method="post" action="/api/admin/sync-costs/${esc(r.id)}" style="margin-bottom:1.4rem">
+    <button class="ops-btn" type="submit">Stripe tutarlarını al (KDV + ücret) →</button>
+  </form>`
+      : "";
+
+  const ledgerHtml =
+    ledger.length === 0
+      ? `<p class="ops-empty">Bu okuma için kayıtlı çağrı yok (takip başlamadan önce oluşturulmuş olabilir).</p>`
+      : `<div class="ledger-wrap"><table class="ledger">
+      <thead><tr><th>Zaman</th><th>Tür</th><th>Detay</th><th>Kullanım</th><th>Maliyet</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table></div>`;
+
+  return summary + syncForm + ledgerHtml;
+}
+
+// Credits page body — vendor balances + spend windows + unit economics.
+function renderCreditsBody(d: {
+  el: ElevenLabsAccount | { error: string };
+  avgPaidListen: number | null;
+  windows: { label: string; t: CostTotals }[];
+  firstCostAt: string | null;
+  fx: FxRate | null;
+  tracked: Reading[];
+  costs: Map<string, CostTotals>;
+}): string {
+  // ElevenLabs — monthly credit allowance (exact, from the API).
+  let elCard: string;
+  if ("error" in d.el) {
+    elCard = `<div class="ops-card"><h2>ElevenLabs</h2>
+      <p class="ops-empty">Hesap bilgisi alınamadı: ${esc(d.el.error)}</p>
+      <p class="note">Salt-okunur anahtar (yalnızca <code>user_read</code>) <code>ELEVENLABS_ADMIN_KEY</code> olarak ayarlanmalı.</p></div>`;
+  } else {
+    const remaining = Math.max(0, d.el.limit - d.el.used);
+    const pctUsed = d.el.limit > 0 ? Math.min(100, (d.el.used / d.el.limit) * 100) : 0;
+    const listens =
+      d.avgPaidListen && d.avgPaidListen > 0
+        ? `≈ ${fmtInt(Math.floor(remaining / d.avgPaidListen))} tam dinlenmiş ücretli okuma <span class="dim">(ortalama ${fmtInt(Math.round(d.avgPaidListen))} kredi/okuma)</span>`
+        : `<span class="dim">henüz ücretli ses verisi yok</span>`;
+    elCard = `<div class="ops-card"><h2>ElevenLabs</h2>
+      <div class="ops-row"><span class="k">Plan</span><span class="v">${esc(d.el.tier)}</span></div>
+      <div class="ops-row"><span class="k">Aylık kredi</span><span class="v">${fmtInt(d.el.used)} / ${fmtInt(d.el.limit)} kullanıldı</span></div>
+      <div class="bar"><span style="width:${pctUsed.toFixed(1)}%"></span></div>
+      <div class="ops-row"><span class="k">Kalan</span><span class="v">${fmtInt(remaining)} kredi <span class="dim">(≈ ${fmtUsdMicros(usdOfCredits(remaining))} değerinde)</span></span></div>
+      <div class="ops-row"><span class="k">Bu kalanla</span><span class="v">${listens}</span></div>
+      <div class="ops-row"><span class="k">Yenilenme</span><span class="v">${d.el.resetAt ? esc(d.el.resetAt.slice(0, 10)) : "—"}</span></div>
+      <div class="ops-row"><span class="k">Aşım (overage)</span><span class="v">${d.el.overageUsd == null ? "—" : `$${esc(d.el.overageUsd)}`}</span></div>
+      <div class="ops-row"><span class="k">Ön ödemeli $ bakiye</span><span class="v"><a href="${ELEVENLABS_BILLING_URL}" target="_blank" rel="noopener">panelde gör →</a></span></div>
+      <p class="note">Krediler önce aylık kotadan düşer; $ bakiye kota bitince kullanılır ve API'de görünmez. Sayaç gerçek kullanımın ~1-2 dk gerisinden gelir.</p></div>`;
+  }
+
+  // Claude — our own exact spend log; balance only in Console.
+  const claudeRows = d.windows
+    .map(
+      (w) =>
+        `<div class="ops-row"><span class="k">${esc(w.label)}</span><span class="v">${fmtUsdMicros(w.t.claudeUsdMicros)} · ${w.t.claudeTry == null ? "—" : fmtTry(w.t.claudeTry)}</span></div>`,
+    )
+    .join("");
+  const claudeCard = `<div class="ops-card"><h2>Claude (Anthropic)</h2>
+      ${claudeRows}
+      <div class="ops-row"><span class="k">Kalan bakiye</span><span class="v"><a href="${ANTHROPIC_BILLING_URL}" target="_blank" rel="noopener">Console'da gör →</a></span></div>
+      <p class="note">Harcama: her çağrının token sayısı × resmi fiyat (kesin). Anthropic kalan bakiyeyi hiçbir API'de vermiyor. Aynı hesabı kullanan başka projeler/Console denemeleri burada görünmez.</p></div>`;
+
+  const audioRows = d.windows
+    .map(
+      (w) =>
+        `<div class="ops-row"><span class="k">${esc(w.label)}</span><span class="v">${fmtUsdMicros(w.t.audioUsdMicros)} · ${w.t.audioTry == null ? "—" : fmtTry(w.t.audioTry)} <span class="dim">(${fmtInt(w.t.freeCredits)} ücretsiz + ${fmtInt(w.t.paidCredits)} ücretli kredi)</span></span></div>`,
+    )
+    .join("");
+  const audioCard = `<div class="ops-card"><h2>Ses (ElevenLabs) harcaması</h2>
+      ${audioRows}
+      <p class="note">Her ses parçası için ElevenLabs'in döndürdüğü <code>character-cost</code> (kesin kredi). Önbellekten (R2) çalınan parçalar kredi harcamaz.${
+        " $ değeri: kredi × $0.08 / 1.000 (ElevenLabs yayınlanan fiyatı). Aylık kota içindeki krediler de bu fiyatla değerlenir."
+      }</p></div>`;
+
+  // Unit economics over readings created since tracking started.
+  const n = d.tracked.length;
+  const paid = d.tracked.filter((r) => r.unlocked);
+  let claudeMicros = 0;
+  let claudeTry: number | null = 0;
+  let freeCredits = 0;
+  let paidCredits = 0;
+  let audioTry: number | null = 0;
+  for (const r of d.tracked) {
+    const t = d.costs.get(r.id);
+    if (!t) continue;
+    claudeMicros += t.claudeUsdMicros;
+    claudeTry = claudeTry == null || t.claudeTry == null ? null : claudeTry + t.claudeTry;
+    freeCredits += t.freeCredits;
+    paidCredits += t.paidCredits;
+    audioTry = audioTry == null || t.audioTry == null ? null : audioTry + t.audioTry;
+  }
+  const audioMicros = usdOfCredits(freeCredits + paidCredits);
+  let revenueTry: number | null = 0;
+  let feeTry: number | null = 0;
+  let salesTry: number | null = 0;
+  for (const r of paid) {
+    const e = readingEconomics(r, d.costs.get(r.id));
+    salesTry = salesTry == null || e.priceTry == null ? null : salesTry + e.priceTry;
+    revenueTry = revenueTry == null || e.revenueNetTry == null ? null : revenueTry + e.revenueNetTry;
+    feeTry = feeTry == null || e.feeTry == null ? null : feeTry + e.feeTry;
+  }
+  const marginTry =
+    revenueTry != null && feeTry != null && claudeTry != null && audioTry != null
+      ? revenueTry - feeTry - claudeTry - audioTry
+      : null;
+  const fxNote = d.fx ? `1 USD = ${d.fx.usdTry.toFixed(4)} TRY (ECB, ${esc(d.fx.date)})` : "kur yok";
+  const toUsd = (tl: number | null) =>
+    tl == null || !d.fx ? "—" : fmtUsdMicros(Math.round((tl / d.fx.usdTry) * 1_000_000));
+  const econCard = `<div class="ops-card"><h2>Birim ekonomi <span class="dim" style="font-weight:400">· takip başlangıcından beri</span></h2>
+      <div class="ops-row"><span class="k">Okuma / ödenen</span><span class="v">${fmtInt(n)} / ${fmtInt(paid.length)}</span></div>
+      <div class="ops-row"><span class="k"><strong>Ödeme öncesi / okuma (ort.)</strong></span><span class="v"><strong>${n ? fmtUsdMicros(Math.round((claudeMicros + usdOfCredits(freeCredits)) / n)) : "—"}</strong></span></div>
+      <div class="ops-row"><span class="k">&nbsp;&nbsp;· Claude</span><span class="v">${n ? fmtUsdMicros(Math.round(claudeMicros / n)) : "—"}</span></div>
+      <div class="ops-row"><span class="k">&nbsp;&nbsp;· Ses: ücretsiz önizleme</span><span class="v">${n ? `${fmtUsdMicros(Math.round(usdOfCredits(freeCredits) / n))} <span class="dim">(${fmtInt(Math.round(freeCredits / n))} kredi)</span>` : "—"}</span></div>
+      <div class="ops-row"><span class="k"><strong>Ödeme sonrası / ödenen okuma (ort.)</strong></span><span class="v"><strong>${paid.length ? `${fmtUsdMicros(Math.round(usdOfCredits(paidCredits) / paid.length))} <span class="dim">(${fmtInt(Math.round(paidCredits / paid.length))} kredi)</span>` : "—"}</strong></span></div>
+      <div class="ops-row"><span class="k">Satışlar (KDV dahil)</span><span class="v">${salesTry == null ? "—" : `${fmtTry(salesTry)} · ${toUsd(salesTry)}`}</span></div>
+      <div class="ops-row"><span class="k">Net gelir (KDV hariç)</span><span class="v">${revenueTry == null ? "—" : `${fmtTry(revenueTry)} · ${toUsd(revenueTry)}`}</span></div>
+      <div class="ops-row"><span class="k">Stripe ücretleri</span><span class="v">${feeTry == null ? "—" : `${fmtTry(feeTry)} · ${toUsd(feeTry)}`}</span></div>
+      <div class="ops-row"><span class="k">Claude (tüm okumalar)</span><span class="v">${claudeTry == null ? "—" : `${fmtTry(claudeTry)} · ${fmtUsdMicros(claudeMicros)}`}</span></div>
+      <div class="ops-row"><span class="k">Ses (tüm okumalar)</span><span class="v">${audioTry == null ? "—" : `${fmtTry(audioTry)} · ${fmtUsdMicros(audioMicros)}`}</span></div>
+      <div class="ops-row"><span class="k"><strong>Kâr</strong></span><span class="v${marginTry != null && marginTry < 0 ? " neg" : ""}"><strong>${marginTry == null ? "—" : `${fmtTry(marginTry)} · ${toUsd(marginTry)}`}</strong></span></div>
+      <div class="ops-row"><span class="k"><strong>Kâr %</strong> <span class="dim">(kâr ÷ satışlar)</span></span><span class="v"><strong>${marginTry != null && salesTry ? fmtPct((marginTry / salesTry) * 100) : "—"}</strong></span></div>
+      <p class="note">Ücretsiz okumaların Claude + ses maliyeti de dahil (edinme maliyeti). ${esc(MARGIN_TITLE)} Bu kartta USD karşılıkları güncel kurla: ${fxNote}.</p></div>`;
+
+  return `  <p class="meta">Takip başlangıcı: ${d.firstCostAt ? esc(d.firstCostAt.replace("T", " ").slice(0, 16)) : "henüz kayıt yok"} · ${fxNote}</p>
+  <div class="credit-grid">${elCard}${claudeCard}${audioCard}${econCard}</div>`;
 }
 
 // Ratings page body — feedback from paid users.
@@ -1159,6 +1619,9 @@ function renderOpsBody(
     promoSent: string | null;
     emailTest: string | null;
     promos: Array<{ promo: Promo; timesRedeemed: number | null }>;
+    costLedger: CostLedgerRow[];
+    costTotals: CostTotals | undefined;
+    costsSynced: string | null;
     // Origin of the current request (e.g. "https://yildizna.me" in prod,
     // "http://localhost:8787" in local dev). Injected into the default
     // promo email body so the recipient has a clickable link back to the
@@ -1175,6 +1638,9 @@ function renderOpsBody(
     promoSent,
     emailTest,
     promos,
+    costLedger,
+    costTotals,
+    costsSynced,
     baseUrl,
   } = opts;
 
@@ -1197,6 +1663,10 @@ function renderOpsBody(
     notice = `<div class="ops-note ok">✓ Test e-postası gönderildi — gelen kutunu (ve spam'i) kontrol et.</div>`;
   } else if (emailTest === "0") {
     notice = `<div class="ops-note warn">Test e-postası gönderilemedi — Resend hatası (loglara bak).</div>`;
+  } else if (costsSynced === "1") {
+    notice = `<div class="ops-note ok">✓ Stripe tutarları (KDV, işlem ücreti) alındı.</div>`;
+  } else if (costsSynced === "0") {
+    notice = `<div class="ops-note warn">Stripe tutarları alınamadı — session/ödeme bulunamadı veya bakiye işlemi henüz oluşmadı (loglara bak).</div>`;
   } else if (notFound) {
     notice = `<div class="ops-note warn">Bu id ile okuma bulunamadı.</div>`;
   }
@@ -1234,6 +1704,8 @@ function renderOpsBody(
     <button class="ops-btn" type="submit">E-postayı Stripe'tan al →</button>
   </form>`;
     }
+
+    detail += renderCostSection(reading, costLedger, costTotals);
 
     // Promosyonlar — list existing promos with live used/not-used status,
     // plus a generate form (% editable, defaults 25; 30-day, single-use,
@@ -1399,8 +1871,11 @@ function ynGenerateEmail(promoId, btn) {
 
 app.get("/admin", async (c) => {
   if (!checkBasicAuth(c, c.env)) return unauthorized();
-  const readings = await listReadingsForAdmin(c.env.DB);
-  return c.html(renderAdminShell("funnel", renderFunnelBody(readings)));
+  const [readings, costs] = await Promise.all([
+    listReadingsForAdmin(c.env.DB),
+    getCostTotalsByReading(c.env.DB),
+  ]);
+  return c.html(renderAdminShell("funnel", renderFunnelBody(readings, costs)));
 });
 
 app.get("/admin/ratings", async (c) => {
@@ -1423,7 +1898,9 @@ app.get("/admin/ops", async (c) => {
   const promoResult = c.req.query("promo") ?? null;
   const promoSent = c.req.query("promo_sent") ?? null;
   const emailTest = c.req.query("email_test") ?? null;
+  const costsSynced = c.req.query("costs") ?? null;
   let reading: Reading | null = null;
+  let costLedger: CostLedgerRow[] = [];
   let notFound = false;
   let promos: Array<{ promo: Promo; timesRedeemed: number | null }> = [];
   if (lookupId) {
@@ -1433,6 +1910,7 @@ app.get("/admin/ops", async (c) => {
       // Load promos + fetch each one's live redemption status from Stripe
       // (Stripe is the source of truth for used/not-used). Few per reading,
       // so the extra calls are fine for an admin page.
+      costLedger = await listCostsForReading(c.env.DB, reading.id);
       const rows = await listPromosForReading(c.env.DB, reading.id);
       promos = await Promise.all(
         rows.map(async (promo) => {
@@ -1457,10 +1935,87 @@ app.get("/admin/ops", async (c) => {
         promoSent,
         emailTest,
         promos,
+        costLedger,
+        costTotals: summarizeLedger(costLedger),
+        costsSynced,
         baseUrl: new URL(c.req.url).origin,
       }),
     ),
   );
+});
+
+// Credits tab: vendor allowance/balance pointers + spend + unit economics.
+app.get("/admin/credits", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const [el, avgPaidListen, d7, d30, all, firstCostAt, fx, readings, costs] =
+    await Promise.all([
+      fetchElevenLabsAccount(c.env),
+      getAvgCreditsPerPaidListen(c.env.DB),
+      getCostTotalsSince(c.env.DB, 7),
+      getCostTotalsSince(c.env.DB, 30),
+      getCostTotalsSince(c.env.DB, null),
+      getFirstCostAt(c.env.DB),
+      getFxRate(c.env.DB),
+      listReadingsForAdmin(c.env.DB),
+      getCostTotalsByReading(c.env.DB),
+    ]);
+  // A reading is "tracked" if it has ledger rows, or was created after
+  // tracking began (e.g. failed before any billed token). readings use
+  // SQLite's "YYYY-MM-DD HH:MM:SS"; the ledger uses ISO — normalise.
+  const tracked = firstCostAt
+    ? readings.filter(
+        (r) =>
+          costs.has(r.id) || r.createdAt.replace(" ", "T") >= firstCostAt.slice(0, 19),
+      )
+    : [];
+  return c.html(
+    renderAdminShell(
+      "credits",
+      renderCreditsBody({
+        el,
+        avgPaidListen,
+        windows: [
+          { label: "Son 7 gün", t: d7 },
+          { label: "Son 30 gün", t: d30 },
+          { label: "Takip başlangıcından beri", t: all },
+        ],
+        firstCostAt,
+        fx,
+        tracked,
+        costs,
+      }),
+    ),
+  );
+});
+
+// Backfill the Stripe side of the margin (VAT, processing fee, net,
+// payment-day FX) for a paid reading — new payments capture this in the
+// webhook; this covers older ones and webhook-time misses.
+app.post("/api/admin/sync-costs/:id", async (c) => {
+  if (!checkBasicAuth(c, c.env)) return unauthorized();
+  const id = c.req.param("id");
+  const reading = await getReading(c.env.DB, id);
+  let ok = "0";
+  if (reading?.unlocked && reading.stripeSessionId) {
+    const totals = await fetchSessionTotals(c.env, reading.stripeSessionId);
+    const piId = reading.stripePaymentIntentId ?? totals?.paymentIntentId ?? null;
+    const financials = piId ? await fetchPaymentFinancials(c.env, piId) : null;
+    const fx = reading.paidAt ? await getFxRateForDate(reading.paidAt.slice(0, 10)) : null;
+    if (totals || financials) {
+      await setStripeFinancials(c.env.DB, id, {
+        amountTotalKurus: totals?.amountTotal ?? null,
+        amountTaxKurus: totals?.amountTax ?? null,
+        stripeFeeMinor: financials?.feeMinor ?? null,
+        stripeNetMinor: financials?.netMinor ?? null,
+        stripeSettlementCurrency: financials?.currency ?? null,
+        stripeExchangeRate: financials?.exchangeRate ?? null,
+        usdTryAtPayment: fx?.usdTry ?? null,
+      });
+      ok = financials ? "1" : "0";
+      console.log("[admin] stripe financials synced", { id, fee: financials != null });
+    }
+  }
+  return c.redirect(`/admin/ops?id=${encodeURIComponent(id)}&costs=${ok}`, 303);
 });
 
 // Reset a reading's payment (admin-only). Form-POSTed from the Ops page.
@@ -1664,7 +2219,14 @@ app.post("/api/admin/generate-email/:promoId", async (c) => {
       operatorContext,
       feedbackRating: includeFeedback ? reading.feedbackRating : null,
       feedbackText: includeFeedback ? reading.feedbackText : null,
-    });
+    }, (usage) =>
+      recordAnthropicCost(c.env.DB, {
+        readingId: reading.id,
+        kind: "promo_email",
+        model: EMAIL_MODEL,
+        usage,
+      }),
+    );
     console.log("[admin] promo email AI-generated", {
       promoId,
       includeFeedback,
@@ -1722,6 +2284,16 @@ export default {
         const sections = await generateYildizname(
           reading.formData,
           env.ANTHROPIC_API_KEY,
+          (a) =>
+            recordAnthropicCost(env.DB, {
+              readingId,
+              kind: "generation",
+              model: LLM_MODEL,
+              usage: a.usage,
+              queueAttempt: msg.attempts,
+              attempt: a.attempt,
+              outcome: a.outcome,
+            }),
         );
         await markReadingDone(env.DB, readingId, sections);
         // If the user left an email on the loading-screen escape hatch

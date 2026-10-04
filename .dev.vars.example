@@ -26,3 +26,9 @@ ADMIN_PASS="change-me-locally"
 # in prod. Production:
 #   npx wrangler secret put RESEND_API_KEY
 RESEND_API_KEY="re_..."
+
+# Read-only ElevenLabs key (permission: user_read ONLY — no TTS, no voices)
+# for the /admin/credits tab's monthly credit allowance. Optional; the tab
+# shows a notice if unset. Production:
+#   npx wrangler secret put ELEVENLABS_ADMIN_KEY
+ELEVENLABS_ADMIN_KEY="sk_..."

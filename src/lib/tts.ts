@@ -161,7 +161,16 @@ export async function fetchCachedChunk(
 // overhead. Total characters synthesized are identical to the v3 path.
 //
 // Returns null if chunkIdx is out of range (route 404s in that case).
-// Throws on ElevenLabs error; the route catches and 502s.
+// Throws on ElevenLabs error; the route catches and 502s. `credits` is the
+// `character-cost` response header — the exact credits ElevenLabs charged
+// for this request (null if the header is ever missing); the route writes
+// it to the cost ledger.
+export interface SynthesizedChunk {
+  bytes: Uint8Array;
+  credits: number | null;
+  textChars: number;
+}
+
 export async function synthesizeChunk(
   env: Env,
   ctx: ExecutionContext,
@@ -169,7 +178,7 @@ export async function synthesizeChunk(
   section: TtsSection,
   chunkIdx: number,
   sections: YildiznameSections,
-): Promise<Uint8Array | null> {
+): Promise<SynthesizedChunk | null> {
   const chunks = buildChunks(section, sections);
   if (chunkIdx < 0 || chunkIdx >= chunks.length) return null;
   const text = chunks[chunkIdx];
@@ -217,6 +226,8 @@ export async function synthesizeChunk(
   }
 
   const bytes = new Uint8Array(await res.arrayBuffer());
+  const costHeader = Number.parseInt(res.headers.get("character-cost") ?? "", 10);
+  const credits = Number.isFinite(costHeader) ? costHeader : null;
 
   // Write to R2 in the background — caller already has the bytes to
   // return to the client. Idempotent on duplicate writes (e.g. two
@@ -244,6 +255,6 @@ export async function synthesizeChunk(
     }),
   );
 
-  return bytes;
+  return { bytes, credits, textChars: text.length };
 }
 

@@ -1,4 +1,5 @@
 import type { FormData, YildiznameSections } from "./types";
+import { emptyUsage, type AnthropicUsage } from "./costs";
 
 // We call the Anthropic Messages API directly with Workers' native fetch,
 // using server-sent-events streaming.
@@ -19,7 +20,7 @@ import type { FormData, YildiznameSections } from "./types";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
-const MODEL = "claude-sonnet-4-5";
+export const LLM_MODEL = "claude-sonnet-4-5";
 // 11 substantial Turkish sections + a poem line need real headroom; at
 // 4000 the model truncates mid-JSON and validation fails. 8000 reliably
 // fits a full reading with margin.
@@ -132,7 +133,13 @@ function validateSections(obj: unknown): YildiznameSections {
 // Parse the Anthropic SSE stream. We're using tool_use so we only care about
 // content blocks of type "tool_use" — their `input_json_delta` events
 // concatenate into a valid JSON document for the tool's input schema.
-async function readAnthropicStream(res: Response): Promise<string> {
+// Token usage is written into `usage` as it arrives (message_start carries
+// the input/cache counts, message_delta the cumulative output count), so
+// the caller still sees what was billed if the stream dies midway.
+async function readAnthropicStream(
+  res: Response,
+  usage: AnthropicUsage,
+): Promise<string> {
   if (!res.body) {
     throw new Error("Müneccim cevabı boş geldi.");
   }
@@ -182,7 +189,15 @@ async function readAnthropicStream(res: Response): Promise<string> {
           partial_json?: string;
           stop_reason?: string;
         };
+        message?: { usage?: RawUsage };
+        usage?: RawUsage;
       };
+
+      if (ev.type === "message_start" && ev.message?.usage) {
+        applyUsage(usage, ev.message.usage);
+      } else if (ev.type === "message_delta" && ev.usage) {
+        applyUsage(usage, ev.usage);
+      }
 
       if (ev.type === "content_block_start") {
         inToolUseBlock = ev.content_block?.type === "tool_use";
@@ -216,9 +231,30 @@ async function readAnthropicStream(res: Response): Promise<string> {
   return toolInputJson;
 }
 
+interface RawUsage {
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+}
+
+// Usage fields in a later event are cumulative totals, so take the
+// latest non-null value for each rather than adding.
+function applyUsage(target: AnthropicUsage, raw: RawUsage): void {
+  if (typeof raw.input_tokens === "number") target.inputTokens = raw.input_tokens;
+  if (typeof raw.output_tokens === "number") target.outputTokens = raw.output_tokens;
+  if (typeof raw.cache_creation_input_tokens === "number") {
+    target.cacheCreationInputTokens = raw.cache_creation_input_tokens;
+  }
+  if (typeof raw.cache_read_input_tokens === "number") {
+    target.cacheReadInputTokens = raw.cache_read_input_tokens;
+  }
+}
+
 async function callAnthropicStream(
   apiKey: string,
   userPrompt: string,
+  usage: AnthropicUsage,
 ): Promise<string> {
   const controller = new AbortController();
   const headersTimer = setTimeout(
@@ -237,7 +273,7 @@ async function callAnthropicStream(
         accept: "text/event-stream",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: LLM_MODEL,
         max_tokens: MAX_TOKENS,
         stream: true,
         system: SYSTEM_PROMPT,
@@ -260,12 +296,21 @@ async function callAnthropicStream(
     throw new Error(`Anthropic ${res.status}`);
   }
 
-  return readAnthropicStream(res);
+  return readAnthropicStream(res, usage);
+}
+
+// One billed Messages API attempt, reported to the caller for the cost
+// ledger. outcome: "ok" | "parse_error" | "transport_error".
+export interface LlmAttempt {
+  attempt: number;
+  outcome: "ok" | "parse_error" | "transport_error";
+  usage: AnthropicUsage;
 }
 
 export async function generateYildizname(
   form: FormData,
   apiKey: string,
+  onAttempt?: (a: LlmAttempt) => Promise<void>,
 ): Promise<YildiznameSections> {
   if (!apiKey || apiKey === "sk-ant-placeholder") {
     throw new Error("Müneccim suskun: API anahtarı ayarlanmamış.");
@@ -278,9 +323,12 @@ export async function generateYildizname(
   // immediate retry won't help and burns another 2–3 minutes).
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
+    const usage = emptyUsage();
     try {
-      const json = await callAnthropicStream(apiKey, userPrompt);
-      return validateSections(JSON.parse(json));
+      const json = await callAnthropicStream(apiKey, userPrompt, usage);
+      const sections = validateSections(JSON.parse(json));
+      await onAttempt?.({ attempt: attempt + 1, outcome: "ok", usage });
+      return sections;
     } catch (err) {
       lastError = err;
       const isTransport =
@@ -288,6 +336,12 @@ export async function generateYildizname(
         (err.message.startsWith("Anthropic ") ||
           err.name === "AbortError" ||
           err.message.includes("vakit doldu"));
+      // Every attempt that streamed tokens is billed, failed or not.
+      await onAttempt?.({
+        attempt: attempt + 1,
+        outcome: isTransport ? "transport_error" : "parse_error",
+        usage,
+      });
       if (isTransport) break;
       console.warn("[llm] parse/validation failed, retrying once", {
         error: err instanceof Error ? err.message : String(err),

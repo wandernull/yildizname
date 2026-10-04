@@ -312,6 +312,104 @@ export async function fetchSessionEmail(
   return session.customer_details?.email ?? session.customer_email ?? null;
 }
 
+// Stripe's processing fee for a payment, read from the charge's balance
+// transaction (expanded off the PaymentIntent in one call). Amounts are in
+// the settlement currency's minor units (e.g. EUR cents for the NL
+// account); exchange_rate is Stripe's own TRY → settlement rate (TRY ×
+// rate = settlement amount). Returns null if the lookup fails or the
+// balance transaction isn't attached yet — the Ops "sync costs" button
+// can backfill later.
+export interface PaymentFinancials {
+  feeMinor: number;
+  netMinor: number;
+  currency: string;
+  exchangeRate: number | null;
+}
+
+export async function fetchPaymentFinancials(
+  env: Env,
+  paymentIntentId: string,
+): Promise<PaymentFinancials | null> {
+  const url =
+    `${STRIPE_API_BASE}/payment_intents/${encodeURIComponent(paymentIntentId)}` +
+    `?expand[]=latest_charge.balance_transaction`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` },
+  });
+  if (!res.ok) {
+    console.warn("[stripe] payment intent fetch failed", {
+      paymentIntentId,
+      status: res.status,
+    });
+    return null;
+  }
+  const pi = (await res.json()) as {
+    latest_charge?: {
+      balance_transaction?:
+        | {
+            fee?: number;
+            net?: number;
+            currency?: string;
+            exchange_rate?: number | null;
+          }
+        | string
+        | null;
+    } | string | null;
+  };
+  const charge = typeof pi.latest_charge === "object" ? pi.latest_charge : null;
+  const bt =
+    charge && typeof charge.balance_transaction === "object"
+      ? charge.balance_transaction
+      : null;
+  if (!bt || typeof bt.fee !== "number" || typeof bt.net !== "number" || !bt.currency) {
+    console.warn("[stripe] balance transaction not available yet", { paymentIntentId });
+    return null;
+  }
+  return {
+    feeMinor: bt.fee,
+    netMinor: bt.net,
+    currency: bt.currency,
+    exchangeRate: typeof bt.exchange_rate === "number" ? bt.exchange_rate : null,
+  };
+}
+
+// Session totals for the Ops "sync costs" backfill on readings paid
+// before migration 0011 (the webhook captures these directly for new
+// payments). amount_tax is the VAT inside amount_total.
+export async function fetchSessionTotals(
+  env: Env,
+  sessionId: string,
+): Promise<{
+  amountTotal: number | null;
+  amountTax: number | null;
+  paymentIntentId: string | null;
+} | null> {
+  const res = await fetch(
+    `${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(sessionId)}`,
+    { headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } },
+  );
+  if (!res.ok) {
+    console.warn("[stripe] session totals fetch failed", {
+      sessionId,
+      status: res.status,
+    });
+    return null;
+  }
+  const session = (await res.json()) as {
+    amount_total?: number | null;
+    total_details?: { amount_tax?: number | null } | null;
+    payment_intent?: string | null;
+  };
+  return {
+    amountTotal: typeof session.amount_total === "number" ? session.amount_total : null,
+    amountTax:
+      typeof session.total_details?.amount_tax === "number"
+        ? session.total_details.amount_tax
+        : null,
+    paymentIntentId: session.payment_intent ?? null,
+  };
+}
+
 // Random promo code suffix: 4 chars from an unambiguous alphabet (no
 // O/0/I/1) so codes are easy to read aloud / type from an email.
 function randomPromoCode(prefix: string): string {

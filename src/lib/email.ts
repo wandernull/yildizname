@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import type { AnthropicUsage } from "./costs";
 
 // Outbound transactional email via Resend (direct REST, no SDK — same
 // shape as stripe.ts). We send AS destek@yildizna.me: the yildizna.me
@@ -166,7 +167,7 @@ export async function sendReadingReadyEmail(
 
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_API_VERSION = "2023-06-01";
-const EMAIL_MODEL = "claude-haiku-4-5-20251001";
+export const EMAIL_MODEL = "claude-haiku-4-5-20251001";
 
 const EMAIL_SYSTEM_PROMPT = `Sen klasik yıldızname, ebced ve ilm-i hurûf geleneğine vâkıf bir üstad müneccimin sesisin. Operatör adına, bir yıldızname müşterisine kısa Türkçe e-posta yazıyorsun.
 
@@ -205,6 +206,7 @@ export interface GeneratedPromoEmail {
 export async function generatePromoEmail(
   env: Env,
   args: GeneratePromoEmailArgs,
+  onUsage?: (usage: AnthropicUsage) => Promise<void>,
 ): Promise<GeneratedPromoEmail> {
   const promptLines: string[] = [
     `Müşteri adı: ${args.customerName || "(belirtilmemiş)"}`,
@@ -281,7 +283,21 @@ export async function generatePromoEmail(
       type: string;
       input?: { subject?: string; body?: string };
     }>;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number | null;
+      cache_read_input_tokens?: number | null;
+    };
   };
+  // Billed even if the tool output turns out unusable below.
+  const usage: AnthropicUsage = {
+    inputTokens: json.usage?.input_tokens ?? 0,
+    outputTokens: json.usage?.output_tokens ?? 0,
+    cacheCreationInputTokens: json.usage?.cache_creation_input_tokens ?? 0,
+    cacheReadInputTokens: json.usage?.cache_read_input_tokens ?? 0,
+  };
+  await onUsage?.(usage);
   const toolUse = json.content?.find((c) => c.type === "tool_use");
   const subject = toolUse?.input?.subject?.trim();
   const body = toolUse?.input?.body?.trim();

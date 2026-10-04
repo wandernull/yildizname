@@ -96,6 +96,17 @@ export interface Reading {
   amountTotalKurus: number | null;
   amountDiscountKurus: number | null;
   stripePromotionCodeId: string | null;
+  // Stripe side of the margin (migration 0011). amountTaxKurus is the VAT
+  // inside amountTotalKurus; the fee/net come from the payment's balance
+  // transaction in the settlement currency (minor units), with Stripe's
+  // own TRY→settlement exchange rate. usdTryAtPayment is the fx snapshot
+  // used for the USD view of revenue + margin. All null until captured.
+  amountTaxKurus: number | null;
+  stripeFeeMinor: number | null;
+  stripeNetMinor: number | null;
+  stripeSettlementCurrency: string | null;
+  stripeExchangeRate: number | null;
+  usdTryAtPayment: number | null;
   // Customer email from the Stripe Checkout Session (migration 0007).
   // Auto-captured at webhook time; backfillable via the admin Ops page.
   customerEmail: string | null;
@@ -166,6 +177,11 @@ export interface Env {
   // through Cloudflare Email Routing to the real inbox (a support@ alias
   // also routes there silently, but destek@ is the only public address).
   RESEND_API_KEY: string;
+  // Read-only ElevenLabs key (user_read scope only) for the /admin/credits
+  // tab — reads the monthly credit allowance. Deliberately separate from
+  // ELEVENLABS_API_KEY, which can only synthesize. Optional: the tab shows
+  // a notice instead of numbers when it's unset.
+  ELEVENLABS_ADMIN_KEY?: string;
   // Background generation queue (Workers Paid). Producer side of the
   // async refactor: /api/generate enqueues a {readingId} and returns
   // immediately; the Worker's queue() handler picks it up and runs the

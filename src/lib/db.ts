@@ -24,6 +24,12 @@ interface ReadingRow {
   amount_total_kurus: number | null;
   amount_discount_kurus: number | null;
   stripe_promotion_code_id: string | null;
+  amount_tax_kurus: number | null;
+  stripe_fee_minor: number | null;
+  stripe_net_minor: number | null;
+  stripe_settlement_currency: string | null;
+  stripe_exchange_rate: number | null;
+  usd_try_at_payment: number | null;
   viewer_ip: string | null;
   client_kind: string | null;
   scrolled_past_free: number;
@@ -44,6 +50,8 @@ const READING_COLUMNS = `
   stripe_session_id, stripe_payment_intent_id, paid_at,
   invoice_hosted_url, invoice_pdf_url, customer_email,
   amount_total_kurus, amount_discount_kurus, stripe_promotion_code_id,
+  amount_tax_kurus, stripe_fee_minor, stripe_net_minor,
+  stripe_settlement_currency, stripe_exchange_rate, usd_try_at_payment,
   viewer_ip, client_kind,
   scrolled_past_free, listened_free, listened_locked,
   listened_chain, clicked_unlock, clicked_unlock_at,
@@ -77,6 +85,12 @@ function rowToReading(row: ReadingRow): Reading {
     amountTotalKurus: row.amount_total_kurus,
     amountDiscountKurus: row.amount_discount_kurus,
     stripePromotionCodeId: row.stripe_promotion_code_id,
+    amountTaxKurus: row.amount_tax_kurus,
+    stripeFeeMinor: row.stripe_fee_minor,
+    stripeNetMinor: row.stripe_net_minor,
+    stripeSettlementCurrency: row.stripe_settlement_currency,
+    stripeExchangeRate: row.stripe_exchange_rate,
+    usdTryAtPayment: row.usd_try_at_payment,
     viewerIp: row.viewer_ip,
     clientKind:
       row.client_kind === "web" ||
@@ -561,6 +575,12 @@ export async function resetPaymentForAdmin(
               amount_total_kurus = NULL,
               amount_discount_kurus = NULL,
               stripe_promotion_code_id = NULL,
+              amount_tax_kurus = NULL,
+              stripe_fee_minor = NULL,
+              stripe_net_minor = NULL,
+              stripe_settlement_currency = NULL,
+              stripe_exchange_rate = NULL,
+              usd_try_at_payment = NULL,
               feedback_rating = NULL,
               feedback_text = NULL,
               feedback_at = NULL,
@@ -571,4 +591,47 @@ export async function resetPaymentForAdmin(
     .bind(id)
     .run();
   return getReading(db, id);
+}
+
+// Stripe side of the margin (migration 0011). Written by the webhook right
+// after markReadingPaid, and by the Ops page "sync costs" backfill. Each
+// field is only overwritten with a non-null value (COALESCE), so a partial
+// fetch (e.g. balance transaction not settled yet) never erases data a
+// previous call already captured.
+export async function setStripeFinancials(
+  db: D1Database,
+  id: string,
+  f: {
+    amountTotalKurus?: number | null;
+    amountTaxKurus: number | null;
+    stripeFeeMinor: number | null;
+    stripeNetMinor: number | null;
+    stripeSettlementCurrency: string | null;
+    stripeExchangeRate: number | null;
+    usdTryAtPayment: number | null;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE readings
+          SET amount_total_kurus = COALESCE(amount_total_kurus, ?),
+              amount_tax_kurus = COALESCE(?, amount_tax_kurus),
+              stripe_fee_minor = COALESCE(?, stripe_fee_minor),
+              stripe_net_minor = COALESCE(?, stripe_net_minor),
+              stripe_settlement_currency = COALESCE(?, stripe_settlement_currency),
+              stripe_exchange_rate = COALESCE(?, stripe_exchange_rate),
+              usd_try_at_payment = COALESCE(usd_try_at_payment, ?)
+        WHERE id = ?`,
+    )
+    .bind(
+      f.amountTotalKurus ?? null,
+      f.amountTaxKurus,
+      f.stripeFeeMinor,
+      f.stripeNetMinor,
+      f.stripeSettlementCurrency,
+      f.stripeExchangeRate,
+      f.usdTryAtPayment,
+      id,
+    )
+    .run();
 }
