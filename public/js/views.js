@@ -2009,6 +2009,16 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
           });
           sectionsHost.appendChild(sec.node);
           disposables.push(sec.dispose);
+          // Health / fertility-adjacent sections carry a plain disclaimer
+          // (also printed in the PDF). The prompt forbids medical claims,
+          // but generated text can't be fully guaranteed.
+          if (key === "saglik" || key === "cocukYuva") {
+            const note = document.createElement("p");
+            note.className = "section-disclaimer";
+            note.textContent =
+              "Bu okuma eğlence ve tefekkür amaçlıdır; tıbbi tavsiye değildir. Sağlığınla ilgili her konuda bir hekime danış.";
+            sec.node.appendChild(note);
+          }
         } else {
           const sec = makeSection({
             title: SECTION_TITLES[key],

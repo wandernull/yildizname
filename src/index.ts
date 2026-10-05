@@ -65,7 +65,11 @@ import {
   sendEmail,
   sendReadingReadyEmail,
 } from "./lib/email";
-import { getKarakterinOzuTeaser, splitKarakterinOzu } from "./lib/text";
+import {
+  getKarakterinOzuTeaser,
+  splitKarakterinOzu,
+  stripSplitMarker,
+} from "./lib/text";
 import {
   fetchCachedChunk,
   getChunkCount,
@@ -74,6 +78,9 @@ import {
 } from "./lib/tts";
 import {
   LOCKED_SECTION_KEYS,
+  QUESTION_TOPIC_LABEL,
+  SECTION_TITLES,
+  TOPIC_SECTION,
   TRACK_EVENTS,
   UNLOCK_SOURCES,
   type Env,
@@ -243,7 +250,7 @@ app.get("/api/reading/:id", async (c) => {
   // The bulk of `rest` stays server-side until unlock, same defence-in-
   // depth pattern as the nine fully-locked sections.
   const karakterinOzuForClient = reading.unlocked
-    ? sections.karakterinOzu
+    ? stripSplitMarker(sections.karakterinOzu)
     : splitKarakterinOzu(sections.karakterinOzu).preview;
 
   // chunkCounts: how many TTS chunks each (virtual) section has under
@@ -918,9 +925,13 @@ function renderKindBadge(kind: string | null): string {
 }
 function renderWhoCell(r: Reading): string {
   const f = r.formData;
+  const asked = !!f.question?.trim();
+  const topic = r.questionTopic
+    ? `<br /><span class="topic" title="${esc(asked ? f.question! : "Soru sorulmadı — konu okumadan seçildi")}">${esc(QUESTION_TOPIC_LABEL[r.questionTopic])}${asked ? "" : " · soru yok"}</span>`
+    : "";
   return `<td class="who">
     <strong>${esc(f.name)}</strong><br />
-    <span class="dim">anne: ${esc(f.motherName)}</span>
+    <span class="dim">anne: ${esc(f.motherName)}</span>${topic}
   </td>`;
 }
 function renderBirthCell(r: Reading): string {
@@ -1193,6 +1204,7 @@ function renderAdminShell(
     .ai-actions { display: flex; align-items: center; gap: 0.8rem; }
     .ai-status { font-size: 0.78rem; color: var(--dim); }
     /* Costs (migration 0011) */
+    .topic { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 4px; font-size: 0.7rem; background: rgba(201,168,76,0.14); color: var(--gold); cursor: help; }
     .flag .src { font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
     .funnel-card { max-width: 640px; margin-bottom: 1.8rem; }
     td.cost { white-space: nowrap; font-size: 0.8rem; text-align: right; font-variant-numeric: tabular-nums; }
@@ -1774,6 +1786,13 @@ function renderOpsBody(
     <h2>${esc(f.name)} <span class="dim" style="color:var(--dim);font-weight:400">· ${esc(reading.id)}</span></h2>
     <div class="ops-row"><span class="k">Oluşturuldu</span><span class="v">${esc(created)}</span></div>
     <div class="ops-row"><span class="k">Durum</span><span class="v">${reading.unlocked ? "Ödendi (açık)" : "Ücretsiz (kilitli)"}</span></div>
+    <div class="ops-row"><span class="k">Merak ettiği</span><span class="v">${esc(f.question?.trim() || "—")}</span></div>
+    <div class="ops-row"><span class="k">Konu → bölüm</span><span class="v">${
+      reading.questionTopic
+        ? `${esc(QUESTION_TOPIC_LABEL[reading.questionTopic])} → ${esc(SECTION_TITLES[TOPIC_SECTION[reading.questionTopic]])}`
+        : "—"
+    }</span></div>
+    <div class="ops-row"><span class="k">Kanca cümlesi</span><span class="v">${esc(reading.hookLine || "—")}</span></div>
     <div class="ops-row"><span class="k">Fiyatı gördü</span><span class="v">${
       reading.openedUnlock
         ? `${reading.openedUnlockCount} kez · ilk ${esc((reading.openedUnlockAt ?? "").replace("T", " ").slice(0, 16))}${reading.openedUnlockSource ? ` · ${esc(UNLOCK_SOURCE_LABEL[reading.openedUnlockSource])}` : ""}`
@@ -2376,7 +2395,7 @@ export default {
           msg.ack();
           continue;
         }
-        const sections = await generateYildizname(
+        const { sections, meta } = await generateYildizname(
           reading.formData,
           env.ANTHROPIC_API_KEY,
           (a) =>
@@ -2390,7 +2409,7 @@ export default {
               outcome: a.outcome,
             }),
         );
-        await markReadingDone(env.DB, readingId, sections);
+        await markReadingDone(env.DB, readingId, sections, meta);
         // If the user left an email on the loading-screen escape hatch
         // (or any prior write to customer_email — e.g. from a previous
         // Stripe checkout on the same id), send the "hazır" email NOW.

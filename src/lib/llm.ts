@@ -1,4 +1,13 @@
-import type { FormData, YildiznameSections } from "./types";
+import {
+  QUESTION_TOPICS,
+  SECTION_TITLES,
+  TOPIC_SECTION,
+  type FormData,
+  type QuestionTopic,
+  type ReadingMeta,
+  type YildiznameSections,
+} from "./types";
+import { KARAKTER_SPLIT_MARKER } from "./text";
 import { emptyUsage, type AnthropicUsage } from "./costs";
 
 // We call the Anthropic Messages API directly with Workers' native fetch,
@@ -69,8 +78,42 @@ function buildUserPrompt(form: FormData): string {
 
 Yorumdan önce sessizce isimdeki baskın harfleri, ad ile anne adının birleşimini, doğum tarihinin sayısal indirgemesini hesapla; her hükmü kişinin kendi harflerine ve ismine bağla — genel fal cümleleri kurma, ona özel konuş. İsme uyan istiâreler kullan (ay, yağmur, demir, kök, nur, kapı, örs gibi). İyi ve karanlık tarafları birlikte, dürüstçe söyle; ne sadece pohpohla ne de korkut. Üslup edebî, derin, akıcı; liste değil, kader okuyan bir hikâye gibi aksın.
 
-Çıktıyı yalnızca geçerli bir JSON nesnesi olarak, başka hiçbir metin olmadan döndür. Anahtarlar ve her birinin değeri en az bir zengin paragraf olsun: kapakSozu (kısa etkileyici mısra), karakterinOzu, gizliHuylar, ruhsalYuk, askEvlilik, esinKarakteri, cocukYuva, rizkKariyer, nazarAgirlik, saglik, donumNoktalari. Her bölümün sonunda bir müneccim tavsiyesi cümlesi olsun. karakterinOzu ücretsiz önizleme olduğu için en güçlü, en merak uyandıran bölüm olsun.`;
+Okumayı submit_reading aracıyla gönder. Bölümler: kapakSozu (kısa etkileyici mısra), karakterinOzuGiris, karakterinOzuDevam, gizliHuylar, ruhsalYuk, askEvlilik, esinKarakteri, cocukYuva, rizkKariyer, nazarAgirlik, saglik, donumNoktalari. kapakSozu ve karakterinOzuGiris dışındaki her bölüm en az bir zengin paragraf olsun ve sonunda bir müneccim tavsiyesi cümlesi bulunsun.
+
+KARAKTERİN ÖZÜ — EN ÖNEMLİ KISIM. Kişi okumanın yalnızca karakterinOzuGiris kısmını ücretsiz görür; geri kalan her şeyi açıp açmamaya buna bakarak karar verir. İnsan, kendisi hakkında doğru bir şey duymadan güvenmez. Bu yüzden:
+• karakterinOzuGiris (4-6 cümle, yaklaşık 450-700 harf): İlk iki-üç cümle, kişinin "bunu nereden biliyor" diyeceği, kendini hemen tanıyacağı iç dünya gözlemleri olsun — dışarıya gösterdiği ile içinde taşıdığı arasındaki fark, kimseye tam anlatmadığı bir yorgunluk ya da özlem, insanların onu nasıl yanlış anladığı, verdiği ile aldığı arasındaki dengesizlik gibi. Bu gözlemleri ismindeki harflere, anne adına ya da doğum gününe bağla ki genel fal cümlesi değil, ona özel bir hüküm gibi dursun. Harf ve ebced hesabını uzun uzun dökme; hikmetin kaynağını bir cümleyle an, yeter. Son cümle bir merak kapısı açsın: kişinin sorusuna (varsa) ya da en çok merak edeceği konuya değin ve cevabın okumanın hangi bölümünde yazılı olduğunu sezdir — ama cevabı ASLA burada verme. Bu kısmın sonunda tavsiye cümlesi olmasın.
+• karakterinOzuDevam: Karakterin özünün devamı, girişin doğal sürdürülmesi (girişi tekrar etme). Burada derinleş; harf ve ebced hikmetini burada aç; sonunda müneccim tavsiyesi olsun.
+
+SORU VE KANCA:
+• soruKonusu: Kişinin en çok merak ettiğini şu konulardan birine ata — ask (aşk, sevgili, evlilik, eş), aile (anne-baba, çocuk, yuva, akraba), kariyer (iş, meslek, okul, başarı), para (rızk, borç, maddi durum), saglik, ruhsal (iç huzur, yük, kaygı, inanç, nazar), genel (kader, gelecek, hayatın gidişatı ya da birden çok konu). Kişi bir şey sormadıysa, okumanın ona en çok merak ettireceği konuyu seç; karakterinOzuGiris'in son cümlesi de o konunun bölümünü işaret etsin.
+• Soruyu cevaplayan bölüm: ask→Aşk ve Evlilik (askEvlilik), aile→Çocuk ve Yuva (cocukYuva), kariyer ve para→Rızk ve Kariyer (rizkKariyer), saglik→Sağlık (saglik), ruhsal→Ruhsal Yük (ruhsalYuk), genel→Dönüm Noktaları (donumNoktalari). Bir soru varsa o bölüm soruya doğrudan, dürüstçe cevap versin.
+• kancaCumlesi: O bölümde gerçekten yazdığın bir şeye dayanan tek bir cümle (en fazla 160 harf), "sen" diye hitap eden. Görevi bir KAPI ARALAMAK: cevabın var olduğunu ve kişiye özel olduğunu sezdirsin, ama hükmü, sonucu ya da "evet/hayır"ı ASLA söylemesin. Kesinlikle yasak: ilişkinin biteceği ya da mutsuz edeceği gibi hükümler; hastalık, kısırlık, çocuk olmayacağı, ölüm, kaza gibi sağlık ya da felaket iddiaları; "şu kadar ay içinde yoksa sonsuza dek" gibi süre baskısı, tehdit ya da korkutma. Ton sıcak ve merak uyandırıcı olsun, ürkütücü değil. Örnek ruh: "Sorduğun ilişkinin seyrini değiştirecek olan şey, senin henüz kimseye söylemediğin o tek cümlede saklı."
+
+KAPAK SÖZÜ: kapakSozu herkesin ücretsiz gördüğü ve sesli dinlediği ilk cümledir. Gizemli, davetkâr ve ismine özel bir mısra olsun; kişiyi okumaya çağırsın. Aşk, sağlık, aile ya da kader hakkında karanlık hüküm, mahkûmiyet, ayrılık ya da yalnızlık kehaneti içermesin.
+
+SAĞLIK VE ÇOCUK-YUVA BÖLÜMLERİ: saglik bölümünde hastalık, organ, teşhis ya da tedavi adı verme; bedeni yalnızca hikmet dilinde, mizaç, denge, dinlenme ve dikkat edilecek eğilimler olarak anlat ve gerektiğinde bir hekime danışmanın hikmetini hatırlat. cocukYuva bölümünde çocuk sahibi olup olamayacağına, kısırlığa, rahme, gebeliğe ya da düşüğe dair asla hüküm verme; yuvayı, bağları, ana-baba ilişkisini ve gönül hazırlığını anlat. Kişi bunu sormuş olsa bile cevabı tıbbi bir kehanet değil, gönle ve yuvaya dair bir hikmet olsun.
+
+GENEL SINIR: Okumanın hiçbir yerinde kesin tıbbi teşhis, kısırlık, ölüm ya da felaket kehaneti yapma; bir ilişkinin biteceğini ya da kişinin yalnız kalacağını hüküm olarak söyleme. Zorlukları eğilim ve sınav olarak anlat, kapıyı her zaman açık bırak.`;
 }
+
+// Tool fields the model fills. karakterinOzu is written as two fields —
+// the free preview (Giris) and its paid continuation (Devam) — so the
+// free/paid boundary is exact; validateSections joins them back into
+// sections.karakterinOzu with KARAKTER_SPLIT_MARKER between.
+const TOOL_SECTION_KEYS = [
+  "kapakSozu",
+  "karakterinOzuGiris",
+  "karakterinOzuDevam",
+  "gizliHuylar",
+  "ruhsalYuk",
+  "askEvlilik",
+  "esinKarakteri",
+  "cocukYuva",
+  "rizkKariyer",
+  "nazarAgirlik",
+  "saglik",
+  "donumNoktalari",
+] as const;
 
 const REQUIRED_KEYS: (keyof YildiznameSections)[] = [
   "kapakSozu",
@@ -100,9 +143,18 @@ const SUBMIT_TOOL = {
     properties: {
       kapakSozu: {
         type: "string",
-        description: "Kısa, etkileyici bir açılış mısrası.",
+        description:
+          "Kısa, gizemli, davetkâr ve isme özel bir açılış mısrası; karanlık hüküm, ayrılık ya da yalnızlık kehaneti içermez.",
       },
-      karakterinOzu: { type: "string" },
+      karakterinOzuGiris: {
+        type: "string",
+        description:
+          "Ücretsiz önizleme: 4-6 cümle. Önce kişinin kendini tanıyacağı iç dünya gözlemleri, sonunda cevabı vermeden merak kapısı açan cümle.",
+      },
+      karakterinOzuDevam: {
+        type: "string",
+        description: "Karakterin özünün ücretli devamı; girişi tekrar etmeden derinleşir.",
+      },
       gizliHuylar: { type: "string" },
       ruhsalYuk: { type: "string" },
       askEvlilik: { type: "string" },
@@ -112,22 +164,121 @@ const SUBMIT_TOOL = {
       nazarAgirlik: { type: "string" },
       saglik: { type: "string" },
       donumNoktalari: { type: "string" },
+      soruKonusu: {
+        type: "string",
+        enum: QUESTION_TOPICS,
+        description:
+          "Kişinin en çok merak ettiği konunun kategorisi; soru yoksa okumanın ona en çok merak ettireceği konu.",
+      },
+      kancaCumlesi: {
+        type: "string",
+        description:
+          "Soruyu cevaplayan bölümün gerçek içeriğine dayanan tek cümle (en fazla 160 harf): kapıyı aralar, hüküm/sonuç vermez; sağlık-kısırlık-ölüm iddiası, süre baskısı ya da korkutma içermez.",
+      },
     },
-    required: REQUIRED_KEYS,
+    required: [...TOOL_SECTION_KEYS, "soruKonusu", "kancaCumlesi"],
   },
 } as const;
 
-function validateSections(obj: unknown): YildiznameSections {
+// Lines shown to UNPAID readers (kapakSözü: top of page + start of the free
+// audio; the hook line: price-modal exit hook, win-back email) get a
+// deterministic guard on top of the prompt rules — in testing the model
+// ignored prompt bans and wrote a fertility claim ("…rahmini de kilitleyen
+// aynı düğüm") and a doom cover line ("ayrılığa mahkûm bir lâm…"). A hit →
+// fixed neutral fallback. Stems match at the START of a word only (Turkish
+// appends suffixes), so "kazanç", "rahmet", "bölüm" don't false-positive;
+// a few benign idioms are removed before matching. Word lists can't catch
+// every phrasing — erring toward the neutral fallback is the safe side.
+const UNSAFE_STEMS = [
+  // health / fertility / death
+  "rahim", "rahmin", "rahmi", "dölyata", "kısır", "gebe", "hamile", "düşük yap",
+  "düşük riski", "doğuramaz", "doğuramayacak", "çocuğun olmaz", "çocuğun olmayacak",
+  "çocuk sahibi olama", "hastalık", "hastalan", "kanser", "tümör", "teşhis",
+  "ameliyat", "ölüm", "ölece", "öleceğ", "vefat", "kaza ", "kazada", "kazaya",
+  "kazası", "felaket",
+  // breakup / doom
+  "ayrıl", "boşan", "terk ed", "aldat", "mahkûm", "mahkum", "yalnız kal",
+  "yalnız öl", "bitecek",
+  // deadlines / pressure
+  "sonsuza dek", "sonsuza kadar", "son şans", "ay içinde", "yıl içinde",
+  // flat negative verdicts ("…seni mutlu etmeyecek")
+  "mutsuz", "mutlu etme", "mutlu olama", "etmeyecek", "olmayacak",
+  "gelmeyecek", "bulamayacak", "olamayacak", "asla",
+];
+const BENIGN_IDIOMS = ["kısır döngü"];
+const TR_LETTER = "a-zçğıöşüâîû";
+const UNSAFE_RE = new RegExp(
+  `(^|[^${TR_LETTER}])(${UNSAFE_STEMS.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+);
+
+export function isUnsafeForUnpaid(text: string): boolean {
+  let hay = (text ?? "").toLocaleLowerCase("tr-TR");
+  for (const idiom of BENIGN_IDIOMS) hay = hay.split(idiom).join(" ");
+  return UNSAFE_RE.test(hay);
+}
+
+export function safeHookLine(raw: string, topic: QuestionTopic): string {
+  const template = `Sorduğun sorunun cevabı ${SECTION_TITLES[TOPIC_SECTION[topic]]} bölümünde, yalnızca senin için yazıldı.`;
+  if (!raw) return template;
+  return isUnsafeForUnpaid(raw) ? template : raw;
+}
+
+const SAFE_KAPAK_SOZU = "Adının harflerinde bir kapı var; ardında yalnızca sana yazılmış bir yol.";
+
+export function safeKapakSozu(raw: string): string {
+  return !raw || isUnsafeForUnpaid(raw) ? SAFE_KAPAK_SOZU : raw;
+}
+
+export interface GeneratedReading {
+  sections: YildiznameSections;
+  meta: ReadingMeta;
+}
+
+function validateSections(obj: unknown): GeneratedReading {
   if (!obj || typeof obj !== "object") {
     throw new Error("Cevap nesne değil.");
   }
   const record = obj as Record<string, unknown>;
-  for (const key of REQUIRED_KEYS) {
-    if (typeof record[key] !== "string" || !record[key]) {
+  for (const key of TOOL_SECTION_KEYS) {
+    if (typeof record[key] !== "string" || !(record[key] as string).trim()) {
       throw new Error(`Eksik bölüm: ${key}`);
     }
   }
-  return record as unknown as YildiznameSections;
+  const giris = (record.karakterinOzuGiris as string).trim();
+  const devam = (record.karakterinOzuDevam as string).trim();
+  const sections = {} as Record<string, string>;
+  for (const key of REQUIRED_KEYS) {
+    sections[key] =
+      key === "karakterinOzu"
+        ? `${giris}\n\n${KARAKTER_SPLIT_MARKER}${devam}`
+        : key === "kapakSozu"
+          ? safeKapakSozu((record[key] as string).trim())
+          : (record[key] as string);
+  }
+  // The free preview can't be swapped for a template (it's the product),
+  // so it relies on the prompt; a hit is logged for review in CF Logs.
+  if (isUnsafeForUnpaid(giris)) {
+    console.warn("[llm] free preview contains unsafe wording", {
+      excerpt: giris.slice(0, 160),
+    });
+  }
+  // Meta is best-effort: a missing/odd topic or hook must never fail a
+  // reading (that would re-run a ~$0.08, 2-minute generation).
+  const rawTopic = record.soruKonusu;
+  const questionTopic: QuestionTopic =
+    typeof rawTopic === "string" && (QUESTION_TOPICS as readonly string[]).includes(rawTopic)
+      ? (rawTopic as QuestionTopic)
+      : "genel";
+  // "Asked or not" is a form fact (form.question), not a topic — the model
+  // picks the most compelling topic either way so the preview's open loop
+  // and the hook always point at a real section.
+  const rawHook =
+    typeof record.kancaCumlesi === "string" ? record.kancaCumlesi.trim().slice(0, 300) : "";
+  const hookLine = safeHookLine(rawHook, questionTopic);
+  return {
+    sections: sections as unknown as YildiznameSections,
+    meta: { questionTopic, hookLine },
+  };
 }
 
 // Parse the Anthropic SSE stream. We're using tool_use so we only care about
@@ -311,7 +462,7 @@ export async function generateYildizname(
   form: FormData,
   apiKey: string,
   onAttempt?: (a: LlmAttempt) => Promise<void>,
-): Promise<YildiznameSections> {
+): Promise<GeneratedReading> {
   if (!apiKey || apiKey === "sk-ant-placeholder") {
     throw new Error("Müneccim suskun: API anahtarı ayarlanmamış.");
   }
@@ -326,9 +477,9 @@ export async function generateYildizname(
     const usage = emptyUsage();
     try {
       const json = await callAnthropicStream(apiKey, userPrompt, usage);
-      const sections = validateSections(JSON.parse(json));
+      const generated = validateSections(JSON.parse(json));
       await onAttempt?.({ attempt: attempt + 1, outcome: "ok", usage });
-      return sections;
+      return generated;
     } catch (err) {
       lastError = err;
       const isTransport =

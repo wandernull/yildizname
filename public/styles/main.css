@@ -1566,9 +1566,26 @@ h4 {
   margin: 0;
 }
 
+/* Disclaimer under the Sağlık + Çocuk ve Yuva sections (paid state). */
+.section-disclaimer {
+  margin: 1.1rem 0 0;
+  padding-top: 0.8rem;
+  border-top: 1px solid rgba(201, 168, 76, 0.18);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--silver);
+  opacity: 0.8;
+}
+
 /* ---------- print ---------- */
 
 @media print {
+  .section-disclaimer {
+    color: #555;
+    opacity: 1;
+  }
   body {
     background: white;
     color: black;

@@ -25,10 +25,31 @@
 // abbreviations like "Dr. " (rare in müneccim prose anyway) but if it
 // does, the only consequence is a slightly earlier cut.
 
+// Readings generated since 2026-10 carry an explicit free/paid boundary:
+// the model writes the preview and the continuation as separate fields
+// (llm.ts) and they're joined with this invisible separator (U+2063) at
+// the start of the continuation's first paragraph. When present, the split
+// is exact — the preview's closing "open loop" sentence always ends the
+// free part. Invisible on purpose: if a code path ever forgets to strip
+// it, nothing shows. Older readings have no marker → 1/3 heuristic below.
+export const KARAKTER_SPLIT_MARKER = "\u2063";
+
+// Full karakterinOzu text for display/unlocked responses — marker removed.
+export function stripSplitMarker(text: string): string {
+  return (text ?? "").split(KARAKTER_SPLIT_MARKER).join("");
+}
+
 export function splitKarakterinOzu(text: string): {
   preview: string;
   rest: string;
 } {
+  const markerAt = (text ?? "").indexOf(KARAKTER_SPLIT_MARKER);
+  if (markerAt >= 0) {
+    return {
+      preview: text.slice(0, markerAt).trim(),
+      rest: stripSplitMarker(text.slice(markerAt + KARAKTER_SPLIT_MARKER.length)).trim(),
+    };
+  }
   const trimmed = (text ?? "").trim();
   if (trimmed.length < 100) {
     return { preview: trimmed, rest: "" };

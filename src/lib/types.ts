@@ -28,6 +28,49 @@ export interface YildiznameSections {
 
 export type SectionKey = Exclude<keyof YildiznameSections, "kapakSozu">;
 
+// What the reader asked about (form.question), classified by the same
+// generation call (migration 0013). When no question was given, the model
+// picks the topic the reading makes most compelling — whether they asked
+// is read from form.question, not from the topic.
+export const QUESTION_TOPICS = [
+  "ask",
+  "aile",
+  "kariyer",
+  "para",
+  "saglik",
+  "ruhsal",
+  "genel",
+] as const;
+export type QuestionTopic = (typeof QUESTION_TOPICS)[number];
+
+// The locked section that answers each topic — the target of the free
+// preview's closing open loop, the modal exit hook and the win-back email.
+export const TOPIC_SECTION: Record<QuestionTopic, SectionKey> = {
+  ask: "askEvlilik",
+  aile: "cocukYuva",
+  kariyer: "rizkKariyer",
+  para: "rizkKariyer",
+  saglik: "saglik",
+  ruhsal: "ruhsalYuk",
+  genel: "donumNoktalari",
+};
+
+export const QUESTION_TOPIC_LABEL: Record<QuestionTopic, string> = {
+  ask: "Aşk",
+  aile: "Aile",
+  kariyer: "Kariyer",
+  para: "Para",
+  saglik: "Sağlık",
+  ruhsal: "Ruhsal",
+  genel: "Genel",
+};
+
+// Non-section outputs of the generation call (migration 0013).
+export interface ReadingMeta {
+  questionTopic: QuestionTopic;
+  hookLine: string;
+}
+
 export const SECTION_TITLES: Record<SectionKey, string> = {
   karakterinOzu: "Karakterin Özü",
   gizliHuylar: "Gizli Huylar",
@@ -137,6 +180,9 @@ export interface Reading {
   openedUnlockCount: number;
   openedUnlockSource: UnlockSource | null;
   clickedUnlockSource: UnlockSource | null;
+  // Generation meta (migration 0013). Null on readings generated before it.
+  questionTopic: QuestionTopic | null;
+  hookLine: string | null;
   // Rate + feedback (migration 0006). Paid-only — populated via
   // POST /api/feedback/:id. feedbackAt's presence is the "already gave
   // feedback" flag the sticky CTA checks. viewed/clicked are funnel flags.

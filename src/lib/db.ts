@@ -3,11 +3,13 @@ import type {
   Promo,
   Reading,
   ReadingStatus,
+  QuestionTopic,
+  ReadingMeta,
   TrackEvent,
   UnlockSource,
   YildiznameSections,
 } from "./types";
-import { UNLOCK_SOURCES } from "./types";
+import { QUESTION_TOPICS, UNLOCK_SOURCES } from "./types";
 
 interface ReadingRow {
   id: string;
@@ -45,6 +47,8 @@ interface ReadingRow {
   opened_unlock_count: number;
   opened_unlock_source: string | null;
   clicked_unlock_source: string | null;
+  question_topic: string | null;
+  hook_line: string | null;
   feedback_rating: number | null;
   feedback_text: string | null;
   feedback_at: string | null;
@@ -64,6 +68,7 @@ const READING_COLUMNS = `
   listened_chain, clicked_unlock, clicked_unlock_at,
   opened_unlock, opened_unlock_at, opened_unlock_count,
   opened_unlock_source, clicked_unlock_source,
+  question_topic, hook_line,
   feedback_rating, feedback_text, feedback_at,
   viewed_feedback_cta, clicked_feedback_cta
 `;
@@ -124,6 +129,12 @@ function rowToReading(row: ReadingRow): Reading {
     openedUnlockCount: row.opened_unlock_count ?? 0,
     openedUnlockSource: asUnlockSource(row.opened_unlock_source),
     clickedUnlockSource: asUnlockSource(row.clicked_unlock_source),
+    questionTopic:
+      row.question_topic != null &&
+      (QUESTION_TOPICS as readonly string[]).includes(row.question_topic)
+        ? (row.question_topic as QuestionTopic)
+        : null,
+    hookLine: row.hook_line,
     feedbackRating: row.feedback_rating,
     feedbackText: row.feedback_text,
     feedbackAt: row.feedback_at,
@@ -163,16 +174,19 @@ export async function markReadingDone(
   db: D1Database,
   id: string,
   sections: YildiznameSections,
+  meta: ReadingMeta | null = null,
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE readings
           SET sections = ?,
               status = 'done',
-              error = NULL
+              error = NULL,
+              question_topic = ?,
+              hook_line = ?
         WHERE id = ?`,
     )
-    .bind(JSON.stringify(sections), id)
+    .bind(JSON.stringify(sections), meta?.questionTopic ?? null, meta?.hookLine ?? null, id)
     .run();
 }
 
