@@ -62,6 +62,17 @@ Goal: raise willingness to pay for the full okuma by building curiosity and trus
 - Send: a delayed queue message (Cloudflare Queues `delaySeconds`, ≤12h) scheduled at the first price-modal open; at fire time send only if the reading is still unpaid, consent is present and nothing was sent yet. Subject + body tied to the question topic; code from the existing promo tool (`createPromo`, `promos` table, Resend).
 - Measure against the Fiyat hunisi ("fiyatı görüp ödemedi" cohort) and promo redemption.
 
+**Suggested next build (proposed 2026-10-06, awaiting product-owner decision) — do A + B together, both small, both about consent:**
+- **A. Start collecting marketing consent now (step 3 prep, no sending):** add the opt-in checkbox ("İndirim ve kampanyalardan haberdar olmak istiyorum") wherever an email is captured (loading-screen escape hatch), store consent + timestamp. Rationale: step 3 may only email consented people; starting now builds that audience while the funnel collects its baseline.
+- **B. Withdrawal-waiver confirmation at payment:** actively confirm the 14-day withdrawal-right waiver at the unlock click (today it's only stated in `/kosullar`) — the biggest open legal gap (see Pending list). More important as paid traffic grows.
+- Then let the Fiyat hunisi run ~2 weeks and decide on **C. step 3 in full** with numbers.
+
+**Owner to-do (no code):**
+- GA4 Admin → Custom definitions: register event-scoped dimensions `source` (if not done yet) and `quoted_question`; mark `begin_checkout` and `exit_hook_clicked` as key events.
+- Ops page: press "Stripe tutarlarını al" on the one older live paid reading.
+- First live payment after 2026-10-06: confirm VAT (`amount_tax_kurus`) is non-zero.
+- ElevenLabs billing history: is the monthly allowance free or prepaid (see Open questions).
+
 ## Decisions log
 A reverse-chronological log of meaningful decisions. Each entry: date, decision, reasoning, alternatives considered.
 
