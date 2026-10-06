@@ -1566,6 +1566,16 @@ h4 {
   margin: 0;
 }
 
+/* Conception-mode note in the price modal (before payment). */
+.unlock-modal-note {
+  margin: -0.4rem 0 1rem;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--silver);
+}
+
 /* Disclaimer under the Sağlık + Çocuk ve Yuva sections (paid state). */
 .section-disclaimer {
   margin: 1.1rem 0 0;

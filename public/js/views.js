@@ -1434,12 +1434,16 @@ async function performUnlock(id, router, btn, errEl, restoreLabel, source) {
 // bar's free-state primary pill to it. The modal is the single place that
 // performs the actual unlock + shows the price, regardless of which entry
 // point opened it.
-function wireUnlockModal({ root, id, router, disposables }) {
+function wireUnlockModal({ root, id, router, disposables, conceptionMode = false }) {
   const modal = root.querySelector(".unlock-modal");
   const modalCta = root.querySelector(".unlock-modal-cta");
   const modalClose = root.querySelector(".unlock-modal-close");
   const modalError = root.querySelector(".unlock-modal-error");
   if (!modal || !modalCta) return () => {};
+  // Conception mode (server-computed from their question): be explicit
+  // before payment about what the reading will not say.
+  const modalNote = root.querySelector(".unlock-modal-note");
+  if (modalNote) modalNote.hidden = !conceptionMode;
 
   // Which entry point opened the modal currently showing — tagged onto
   // the opened_unlock event and carried through to clicked_unlock so the
@@ -2057,7 +2061,13 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
         barPrimary.textContent = "Kaderinin tamamını aç →";
         barPdf.hidden = true;
         barFeedback.hidden = true;
-        const openUnlockModal = wireUnlockModal({ root, id, router, disposables });
+        const openUnlockModal = wireUnlockModal({
+          root,
+          id,
+          router,
+          disposables,
+          conceptionMode: data.conceptionMode === true,
+        });
         barPrimary.addEventListener("click", () => openUnlockModal("action_bar"));
       } else {
         // Paid: the primary pill IS the chain "Baştan Sona Dinle" button.

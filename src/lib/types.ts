@@ -183,6 +183,9 @@ export interface Reading {
   // Generation meta (migration 0013). Null on readings generated before it.
   questionTopic: QuestionTopic | null;
   hookLine: string | null;
+  // Audit trail of the sentence-level safety net (migration 0014). Empty
+  // when nothing was flagged or the reading predates it.
+  safetyEdits: { section: string; original: string; replacement: string }[];
   // Rate + feedback (migration 0006). Paid-only — populated via
   // POST /api/feedback/:id. feedbackAt's presence is the "already gave
   // feedback" flag the sticky CTA checks. viewed/clicked are funnel flags.

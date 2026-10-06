@@ -8,6 +8,7 @@ import {
   type YildiznameSections,
 } from "./types";
 import { KARAKTER_SPLIT_MARKER } from "./text";
+import { isConceptionQuestion } from "./safety";
 import { emptyUsage, type AnthropicUsage } from "./costs";
 
 // We call the Anthropic Messages API directly with Workers' native fetch,
@@ -73,8 +74,14 @@ function buildUserPrompt(form: FormData): string {
     ? `. Kişinin en çok merak ettiği: ${form.question}`
     : "";
   const birthDateTr = formatBirthDateTurkish(form.birthDate);
+  // Conception mode (see safety.ts): the reader is trying to have a child.
+  const conceptionStr = isConceptionQuestion(form.question)
+    ? `
 
-  return `Sana verilen kişi bilgileri: ad-soyad: ${form.name}, anne adı: ${form.motherName}, doğum tarihi: ${birthDateTr}, doğum yeri: ${form.birthPlace}${spouseStr}${questionStr}.
+HASSAS DURUM — ÇOCUK SAHİBİ OLMAYA ÇALIŞAN KİŞİ: Bu kişi çocuk sahibi olmaya çalışıyor; tedavi görüyor olabilir. Okumanın HİÇBİR yerinde (önizleme, kancaCumlesi, Sağlık, Çocuk ve Yuva dahil) çocuğun olacağını ya da olmayacağını, ne zaman olacağını ima etme — "kapı açılacak", "kapalı değil", "nasip olacak", "anneliğin bir hediye olacak", "geç gelecek" gibi umut vaatleri de yasak. Bedenin ya da ruhun "hazır olmadığı", "kilitli", "durgun" olduğu, ya da kısırlığın harflerden, unsurlardan, duygulardan geldiği gibi açıklamalar yapma; tedavinin sonucunu tahmin etme. Bunun yerine bu yolun yükünü, sabrı, eşle ve sevdiklerle bağı, kendine şefkati, hekime güveni ve yuvanın havasını derinlemesine anlat; zaafları ve zor yanları yine dürüstçe söyle. Çocuk ve Yuva bölümü şu çizgiyle açılsın: "Sorduğun çocuk meselesinin hükmü hekimin ve Rabbin elindedir; müneccim onu söyleyemez." ÖNİZLEME KAPANIŞI: Bu kişi için karakterinOzuGiris'in sonuna kapanış cümlesini BİZ ekliyoruz (çocuk meselesinin hükmünü ve Çocuk ve Yuva bölümünü o cümle anlatıyor). Bu yüzden karakterinOzuGiris'i hiçbir bölüme işaret etmeden, çocuk meselesine değinmeden, son tanıma gözleminle bitir — genel "son cümle bir merak kapısı açsın" kuralı bu kişi için geçerli değil.`
+    : "";
+
+  return `Sana verilen kişi bilgileri: ad-soyad: ${form.name}, anne adı: ${form.motherName}, doğum tarihi: ${birthDateTr}, doğum yeri: ${form.birthPlace}${spouseStr}${questionStr}.${conceptionStr}
 
 Yorumdan önce sessizce isimdeki baskın harfleri, ad ile anne adının birleşimini, doğum tarihinin sayısal indirgemesini hesapla; her hükmü kişinin kendi harflerine ve ismine bağla — genel fal cümleleri kurma, ona özel konuş. İsme uyan istiâreler kullan (ay, yağmur, demir, kök, nur, kapı, örs gibi). İyi ve karanlık tarafları birlikte, dürüstçe söyle; ne sadece pohpohla ne de korkut. Üslup edebî, derin, akıcı; liste değil, kader okuyan bir hikâye gibi aksın.
 
@@ -87,11 +94,19 @@ KARAKTERİN ÖZÜ — EN ÖNEMLİ KISIM. Kişi okumanın yalnızca karakterinOzu
 SORU VE KANCA:
 • soruKonusu: Kişinin en çok merak ettiğini şu konulardan birine ata — ask (aşk, sevgili, evlilik, eş), aile (anne-baba, çocuk, yuva, akraba), kariyer (iş, meslek, okul, başarı), para (rızk, borç, maddi durum), saglik, ruhsal (iç huzur, yük, kaygı, inanç, nazar), genel (kader, gelecek, hayatın gidişatı ya da birden çok konu). Kişi bir şey sormadıysa, okumanın ona en çok merak ettireceği konuyu seç; karakterinOzuGiris'in son cümlesi de o konunun bölümünü işaret etsin.
 • Soruyu cevaplayan bölüm: ask→Aşk ve Evlilik (askEvlilik), aile→Çocuk ve Yuva (cocukYuva), kariyer ve para→Rızk ve Kariyer (rizkKariyer), saglik→Sağlık (saglik), ruhsal→Ruhsal Yük (ruhsalYuk), genel→Dönüm Noktaları (donumNoktalari). Bir soru varsa o bölüm soruya doğrudan, dürüstçe cevap versin.
-• kancaCumlesi: O bölümde gerçekten yazdığın bir şeye dayanan tek bir cümle (en fazla 160 harf), "sen" diye hitap eden. Görevi bir KAPI ARALAMAK: cevabın var olduğunu ve kişiye özel olduğunu sezdirsin, ama hükmü, sonucu ya da "evet/hayır"ı ASLA söylemesin. Kesinlikle yasak: ilişkinin biteceği ya da mutsuz edeceği gibi hükümler; hastalık, kısırlık, çocuk olmayacağı, ölüm, kaza gibi sağlık ya da felaket iddiaları; "şu kadar ay içinde yoksa sonsuza dek" gibi süre baskısı, tehdit ya da korkutma. Ton sıcak ve merak uyandırıcı olsun, ürkütücü değil. Örnek ruh: "Sorduğun ilişkinin seyrini değiştirecek olan şey, senin henüz kimseye söylemediğin o tek cümlede saklı."
+• kancaCumlesi: O bölümde gerçekten yazdığın bir şeye dayanan tek bir cümle (en fazla 160 harf), "sen" diye hitap eden. Görevi bir KAPI ARALAMAK: cevabın var olduğunu ve kişiye özel olduğunu sezdirsin, ama hükmü, sonucu ya da "evet/hayır"ı ASLA söylemesin. Kesinlikle yasak: ilişkinin biteceği ya da mutsuz edeceği gibi hükümler; hastalık, kısırlık, çocuk olmayacağı, ölüm, kaza gibi sağlık ya da felaket iddiaları; "şu kadar ay içinde yoksa sonsuza dek" gibi süre baskısı, tehdit ya da korkutma. Ton sıcak, davetkâr ve umut veren bir merak olsun: kişiyi ödüle çağırsın, cezayla korkutmasın. Uyarı ya da şart kipi kullanma ("…bilmezsen", "…yapmazsan", "…yoksa", "yarıda kalır", "kaçırırsın"); "uğursuz", "sonu", "bitiş" gibi karanlık sözcükler kullanma. Örnek ruh: "Sorduğun ilişkinin seyrini değiştirecek olan şey, senin henüz kimseye söylemediğin o tek cümlede saklı." ya da "Rızkının açılacağı kapı, sandığın yerde değil; harflerin onu çoktan işaret etmiş."
 
 KAPAK SÖZÜ: kapakSozu herkesin ücretsiz gördüğü ve sesli dinlediği ilk cümledir. Gizemli, davetkâr ve ismine özel bir mısra olsun; kişiyi okumaya çağırsın. Aşk, sağlık, aile ya da kader hakkında karanlık hüküm, mahkûmiyet, ayrılık ya da yalnızlık kehaneti içermesin.
 
-SAĞLIK VE ÇOCUK-YUVA BÖLÜMLERİ: saglik bölümünde hastalık, organ, teşhis ya da tedavi adı verme; bedeni yalnızca hikmet dilinde, mizaç, denge, dinlenme ve dikkat edilecek eğilimler olarak anlat ve gerektiğinde bir hekime danışmanın hikmetini hatırlat. cocukYuva bölümünde çocuk sahibi olup olamayacağına, kısırlığa, rahme, gebeliğe ya da düşüğe dair asla hüküm verme; yuvayı, bağları, ana-baba ilişkisini ve gönül hazırlığını anlat. Kişi bunu sormuş olsa bile cevabı tıbbi bir kehanet değil, gönle ve yuvaya dair bir hikmet olsun.
+SAĞLIK VE ÇOCUK-YUVA BÖLÜMLERİ — MÜNECCİM GİBİ KONUŞ, HEKİM GİBİ DEĞİL. Yıldızname iyiyi de kötüyü de söyler; bu bölümlerde de zaafı, zor mevsimi, zararlı huyu, aile yükünü açıkça söyle. Ama teşhisi hekime bırak.
+• SÖYLE (zor olanı da): mizaç (ateş fazlası, soğuk ve rutubetli yapı, su ağırlığı), zaaflar, bedeni yoran huylar (öfkeyi yutmak, kendini ihmal etmek, düzensizlik), yorucu mevsimler ve dönemler, geleneksel beden bölgeleri (baş, göğüs, boğaz, mide, bel, sırt) — "bedelini başın ve göğsün öder" gibi; aile içi gerginlik, ana-baba yükü, ebeveynlik sınavları. Uygun yerde "erteleme, bir hekime göster" de.
+• SÖYLEME: hastalık ya da durum adı (kist, ur, tiroid, tansiyon, bronşit, migren, hormon, "kadın hastalıkları" gibi); iç organ ya da üreme organları, adet ve döngüler; kişinin çocuk sahibi olup olamayacağına ya da çocuğun NE ZAMAN geleceğine ("ilk çocuk geç gelecek", "geç kalmadın") dair HER hüküm, olumlu ("bereketli rahim", "kaderinde annelik var") ya da olumsuz; çocuk sormamış birine çocuk kehaneti; duygularının ya da ruhunun bedeni, sağlığı ya da çocuk sahibi olmayı kilitlediği/açtığı fikri.
+• ÖRNEK DÖNÜŞÜMLER (ruhu bu olsun):
+  – Yanlış: "Kadın hastalıkları tarafında düzensizlik, ağrı, kist, ur gibi belirtiler var." Doğru: "İsminle anne adın arasında ateş fazlası var; bu ateş içeride birikir. Senin bedenin sessiz ama ısrarla konuşur; bir yerin sana tekrar tekrar seslenirse onu erteleme, bir hekime göster. Senin zaafın, kendine en son bakman."
+  – Yanlış: "Hormon dengesizlikleri, tiroid sorunları görülebilir." Doğru: "Haritanda Ay ile Merkür gergin duruyor; bir hafta coşkulu, bir hafta bitkin olduğun bir mizaç bu. Bu dalgalanmayı kader sanma; uyku, güneş ve düzenle yatışır."
+  – Yanlış: "Tansiyon, sinir krizi… bronşit, nefes darlığı görürsün." Doğru: "Adındaki ısı harfleri sana fazladan ateş verir. Hiddet senin en pahalı huyundur; öfkeni her yuttuğunda bedelini başın ve göğsün öder. Soğuk mevsimde kendini koru, sıcak öfkede kendini serinlet."
+  – Yanlış: "Adının mirası sana bereketli bir rahim vaat eder." Doğru: "Adının mirası sana bereketli bir yuva vaat eder: kalabalık sofralar, sana dayanan insanlar. Ama sen bereketi bazen yük gibi görürsün; yuvan, yükü paylaşmayı öğrendiğinde bereketlenir."
+  – Kişi çocuk sahibi olmayı sorduysa: "Çocuk meselesini sordun; bunun zamanı ve yolu hekimin ve Rabbin bileceği iştir, müneccimin değil. Müneccimin gördüğü şu: sende bir anne yüreği çoktan var…" — sonra yuvayı, bağları ve gönül hazırlığını anlat.
 
 GENEL SINIR: Okumanın hiçbir yerinde kesin tıbbi teşhis, kısırlık, ölüm ya da felaket kehaneti yapma; bir ilişkinin biteceğini ya da kişinin yalnız kalacağını hüküm olarak söyleme. Zorlukları eğilim ve sınav olarak anlat, kapıyı her zaman açık bırak.`;
 }
@@ -173,7 +188,7 @@ const SUBMIT_TOOL = {
       kancaCumlesi: {
         type: "string",
         description:
-          "Soruyu cevaplayan bölümün gerçek içeriğine dayanan tek cümle (en fazla 160 harf): kapıyı aralar, hüküm/sonuç vermez; sağlık-kısırlık-ölüm iddiası, süre baskısı ya da korkutma içermez.",
+          "Soruyu cevaplayan bölümün gerçek içeriğine dayanan tek cümle (en fazla 160 harf): sıcak ve davetkâr, kapıyı aralar, hüküm/sonuç vermez; uyarı-şart kipi, sağlık-kısırlık-ölüm iddiası, süre baskısı ya da korkutma içermez.",
       },
     },
     required: [...TOOL_SECTION_KEYS, "soruKonusu", "kancaCumlesi"],
@@ -204,6 +219,10 @@ const UNSAFE_STEMS = [
   // flat negative verdicts ("…seni mutlu etmeyecek")
   "mutsuz", "mutlu etme", "mutlu olama", "etmeyecek", "olmayacak",
   "gelmeyecek", "bulamayacak", "olamayacak", "asla",
+  // conditional threats / dark framing ("…bilmezsen köprü yarıda kalır",
+  // "…bu bağın sonunu gösterir") — hooks should invite, not warn
+  "bilmezsen", "yapmazsan", "etmezsen", "görmezsen", "anlamazsan", "çözmezsen",
+  "kaçırırsan", "kaçırırsın", "yarıda kal", "uğursuz", "sonunu", "sonu gel",
 ];
 const BENIGN_IDIOMS = ["kısır döngü"];
 const TR_LETTER = "a-zçğıöşüâîû";

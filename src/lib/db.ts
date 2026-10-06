@@ -49,6 +49,7 @@ interface ReadingRow {
   clicked_unlock_source: string | null;
   question_topic: string | null;
   hook_line: string | null;
+  safety_edits: string | null;
   feedback_rating: number | null;
   feedback_text: string | null;
   feedback_at: string | null;
@@ -68,10 +69,20 @@ const READING_COLUMNS = `
   listened_chain, clicked_unlock, clicked_unlock_at,
   opened_unlock, opened_unlock_at, opened_unlock_count,
   opened_unlock_source, clicked_unlock_source,
-  question_topic, hook_line,
+  question_topic, hook_line, safety_edits,
   feedback_rating, feedback_text, feedback_at,
   viewed_feedback_cta, clicked_feedback_cta
 `;
+
+function parseSafetyEdits(raw: string | null): Reading["safetyEdits"] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 function asUnlockSource(v: string | null): UnlockSource | null {
   return v != null && (UNLOCK_SOURCES as readonly string[]).includes(v)
@@ -135,6 +146,7 @@ function rowToReading(row: ReadingRow): Reading {
         ? (row.question_topic as QuestionTopic)
         : null,
     hookLine: row.hook_line,
+    safetyEdits: parseSafetyEdits(row.safety_edits),
     feedbackRating: row.feedback_rating,
     feedbackText: row.feedback_text,
     feedbackAt: row.feedback_at,
@@ -175,6 +187,7 @@ export async function markReadingDone(
   id: string,
   sections: YildiznameSections,
   meta: ReadingMeta | null = null,
+  safetyEdits: { section: string; original: string; replacement: string }[] = [],
 ): Promise<void> {
   await db
     .prepare(
@@ -183,10 +196,17 @@ export async function markReadingDone(
               status = 'done',
               error = NULL,
               question_topic = ?,
-              hook_line = ?
+              hook_line = ?,
+              safety_edits = ?
         WHERE id = ?`,
     )
-    .bind(JSON.stringify(sections), meta?.questionTopic ?? null, meta?.hookLine ?? null, id)
+    .bind(
+      JSON.stringify(sections),
+      meta?.questionTopic ?? null,
+      meta?.hookLine ?? null,
+      safetyEdits.length ? JSON.stringify(safetyEdits) : null,
+      id,
+    )
     .run();
 }
 

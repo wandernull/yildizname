@@ -24,6 +24,12 @@ import {
 } from "./lib/db";
 import { generateYildizname, LLM_MODEL } from "./lib/llm";
 import {
+  CONCEPTION_HOOK,
+  isConceptionQuestion,
+  SAFETY_MODEL,
+  sanitizeSensitiveSections,
+} from "./lib/safety";
+import {
   ANTHROPIC_BILLING_URL,
   ELEVENLABS_BILLING_URL,
   fetchElevenLabsAccount,
@@ -285,6 +291,9 @@ app.get("/api/reading/:id", async (c) => {
     unlocked: reading.unlocked,
     kapakSozu: sections.kapakSozu,
     karakterinOzu: karakterinOzuForClient,
+    // Conception mode: the price modal states the reading won't predict
+    // whether they'll have a child (honest before payment).
+    conceptionMode: isConceptionQuestion(reading.formData.question),
     karakterinOzuTeaser: reading.unlocked
       ? null
       : getKarakterinOzuTeaser(sections.karakterinOzu),
@@ -929,9 +938,12 @@ function renderWhoCell(r: Reading): string {
   const topic = r.questionTopic
     ? `<br /><span class="topic" title="${esc(asked ? f.question! : "Soru sorulmadı — konu okumadan seçildi")}">${esc(QUESTION_TOPIC_LABEL[r.questionTopic])}${asked ? "" : " · soru yok"}</span>`
     : "";
+  const sensitive = isConceptionQuestion(f.question)
+    ? ` <span class="topic sensitive" title="Çocuk sahibi olma sorusu — sıkı güvenlik modu">hassas: doğurganlık</span>`
+    : "";
   return `<td class="who">
     <strong>${esc(f.name)}</strong><br />
-    <span class="dim">anne: ${esc(f.motherName)}</span>${topic}
+    <span class="dim">anne: ${esc(f.motherName)}</span>${topic}${sensitive}
   </td>`;
 }
 function renderBirthCell(r: Reading): string {
@@ -1204,6 +1216,10 @@ function renderAdminShell(
     .ai-actions { display: flex; align-items: center; gap: 0.8rem; }
     .ai-status { font-size: 0.78rem; color: var(--dim); }
     /* Costs (migration 0011) */
+    .topic.sensitive { background: rgba(217,122,122,0.16); color: #e0a3a3; }
+    .safety-edit { padding: 0.55rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.84rem; line-height: 1.5; }
+    .safety-orig { color: #e0a3a3; }
+    .safety-new { color: #7be3a0; }
     .topic { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 4px; font-size: 0.7rem; background: rgba(201,168,76,0.14); color: var(--gold); cursor: help; }
     .flag .src { font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
     .funnel-card { max-width: 640px; margin-bottom: 1.8rem; }
@@ -1419,6 +1435,22 @@ function renderCostCells(r: Reading, t: CostTotals | undefined): string {
   <td class="cost${marginCls}">${e.marginPct != null ? `<strong>${fmtPct(e.marginPct)}</strong>` : `<span class="dim">—</span>`}</td>`;
 }
 
+// Ops page: every automated edit the safety net made to paid content.
+function renderSafetyEdits(r: Reading): string {
+  if (r.safetyEdits.length === 0) return "";
+  const rows = r.safetyEdits
+    .map(
+      (e) => `<div class="safety-edit">
+      <div class="dim">${esc(e.section === "onizleme" ? "Karakterin Özü (önizleme)" : (SECTION_TITLES[e.section as keyof typeof SECTION_TITLES] ?? e.section))}</div>
+      <div class="safety-orig">− ${esc(e.original)}</div>
+      <div class="safety-new">${e.replacement ? `+ ${esc(e.replacement)}` : `<span class="dim">(cümle çıkarıldı)</span>`}</div>
+    </div>`,
+    )
+    .join("");
+  return `<div class="ops-card"><h2>Güvenlik düzeltmeleri <span class="dim" style="font-weight:400">· ${r.safetyEdits.length} cümle</span></h2>${rows}
+    <p class="note">Sağlık / Çocuk ve Yuva'da hastalık-organ adı, döngü, doğurganlık hükmü/zamanlaması ya da "duyguların bedeni kilitler" fikri içeren cümleler otomatik değiştirildi. Zaaf, mizaç ve uyarılar korunur.</p></div>`;
+}
+
 const COST_KIND_LABEL: Record<string, string> = {
   generation: "Okuma (Claude)",
   free_audio: "Ses: ücretsiz",
@@ -1441,7 +1473,9 @@ function renderCostSection(
             (c.cacheReadInputTokens ? ` · ${fmtInt(c.cacheReadInputTokens)} cache` : "")
           : `${fmtInt(c.textChars ?? 0)} karakter`;
       const where =
-        c.kind === "generation"
+        c.kind === "generation" && c.outcome?.startsWith("safety_fix")
+          ? `güvenlik düzeltmesi · ${esc(c.outcome.replace("safety_fix:", ""))} cümle`
+          : c.kind === "generation"
           ? `deneme ${c.queueAttempt ?? "?"}.${c.attempt ?? "?"} · ${esc(c.outcome ?? "")}`
           : c.section
             ? `${esc(c.section)} #${c.chunkIdx ?? "?"}`
@@ -1820,6 +1854,7 @@ function renderOpsBody(
     }
 
     detail += renderCostSection(reading, costLedger, costTotals);
+    detail += renderSafetyEdits(reading);
 
     // Promosyonlar — list existing promos with live used/not-used status,
     // plus a generate form (% editable, defaults 25; 30-day, single-use,
@@ -2395,7 +2430,7 @@ export default {
           msg.ack();
           continue;
         }
-        const { sections, meta } = await generateYildizname(
+        const generated = await generateYildizname(
           reading.formData,
           env.ANTHROPIC_API_KEY,
           (a) =>
@@ -2409,7 +2444,28 @@ export default {
               outcome: a.outcome,
             }),
         );
-        await markReadingDone(env.DB, readingId, sections, meta);
+        // Safety rewrite of Sağlık / Çocuk ve Yuva when they contain
+        // body/fertility claims (src/lib/safety.ts). Never throws; each
+        // Haiku call is logged as part of this reading's generation cost.
+        const conception = isConceptionQuestion(reading.formData.question);
+        const { sections, edits, usage: safetyUsage } = await sanitizeSensitiveSections(
+          env.ANTHROPIC_API_KEY,
+          generated.sections,
+          { conception },
+        );
+        // Conception mode: the hook (shown to unpaid readers) is fixed text.
+        if (conception) generated.meta.hookLine = CONCEPTION_HOOK;
+        if (safetyUsage) {
+          await recordAnthropicCost(env.DB, {
+            readingId,
+            kind: "generation",
+            model: SAFETY_MODEL,
+            usage: safetyUsage,
+            queueAttempt: msg.attempts,
+            outcome: `safety_fix:${edits.length}${conception ? ":conception" : ""}`,
+          });
+        }
+        await markReadingDone(env.DB, readingId, sections, generated.meta, edits);
         // If the user left an email on the loading-screen escape hatch
         // (or any prior write to customer_email — e.g. from a previous
         // Stripe checkout on the same id), send the "hazır" email NOW.
