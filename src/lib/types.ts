@@ -110,6 +110,8 @@ export const TRACK_EVENTS = [
   "listened_chain",
   "clicked_unlock",
   "opened_unlock",
+  "exit_hook_seen",
+  "exit_hook_clicked",
   "viewed_feedback_cta",
   "clicked_feedback_cta",
 ] as const;
@@ -117,7 +119,7 @@ export type TrackEvent = (typeof TRACK_EVENTS)[number];
 
 // Which unlock entry point opened the price modal (migration 0012). Sent
 // with opened_unlock and clicked_unlock; anything else is stored as NULL.
-export const UNLOCK_SOURCES = ["devamini_oku", "unlock_card", "action_bar"] as const;
+export const UNLOCK_SOURCES = ["devamini_oku", "unlock_card", "action_bar", "exit_hook"] as const;
 export type UnlockSource = (typeof UNLOCK_SOURCES)[number];
 
 export interface Reading {
@@ -180,6 +182,11 @@ export interface Reading {
   openedUnlockCount: number;
   openedUnlockSource: UnlockSource | null;
   clickedUnlockSource: UnlockSource | null;
+  // Price-modal exit hook (migration 0015).
+  exitHookSeen: boolean;
+  exitHookSeenAt: string | null;
+  exitHookClicked: boolean;
+  exitHookClickedAt: string | null;
   // Generation meta (migration 0013). Null on readings generated before it.
   questionTopic: QuestionTopic | null;
   hookLine: string | null;

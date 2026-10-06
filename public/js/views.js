@@ -869,6 +869,17 @@ export function renderLoading(router) {
         throw new Error(initial.error || "Müneccim sustu.");
       }
       const readingId = initial.id;
+      // Exit hook (win-back step 2): remember the reader's own question on
+      // THIS device only, so the hook card can quote it back to them. The
+      // server never returns the question — a shared /okuma link opened
+      // elsewhere can't expose it.
+      if (form.question) {
+        try {
+          window.localStorage.setItem(`yn_q_${readingId}`, form.question);
+        } catch {
+          /* private mode / storage blocked — card just won't quote it */
+        }
+      }
       // URL bar reflects the real okuma URL while the wait continues —
       // share, refresh, address-bar copy all work; refresh lands on
       // renderResult which itself mounts the same loading experience.
@@ -1436,7 +1447,84 @@ async function performUnlock(id, router, btn, errEl, restoreLabel, source) {
 // bar's free-state primary pill to it. The modal is the single place that
 // performs the actual unlock + shows the price, regardless of which entry
 // point opened it.
-function wireUnlockModal({ root, id, router, disposables, conceptionMode = false }) {
+// Price-modal exit hook (win-back step 2). Shown once per reading per
+// device when the reader closes the price modal WITHOUT going to Stripe:
+// their own question (only on the device that submitted it), their hook
+// line and the section that answers it, plus "Devamı burada →" which
+// re-opens the modal with source 'exit_hook'. No discount, no countdown.
+function showExitHook({ root, id, exitHook, reopen }) {
+  const seenKey = `yn_exit_hook_${id}`;
+  try {
+    if (window.localStorage.getItem(seenKey)) return;
+    window.localStorage.setItem(seenKey, "1");
+  } catch {
+    /* storage blocked: still show once for this page view */
+  }
+  let question = null;
+  try {
+    question = window.localStorage.getItem(`yn_q_${id}`);
+  } catch {
+    question = null;
+  }
+
+  const card = document.createElement("div");
+  card.className = "exit-hook";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-label", "Okumanın devamı");
+
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "exit-hook-close";
+  close.setAttribute("aria-label", "Kapat");
+  close.textContent = "×";
+  card.appendChild(close);
+
+  if (question) {
+    const q = document.createElement("p");
+    q.className = "exit-hook-question";
+    q.textContent = `Bunu merak etmiştin: “${question}”`;
+    card.appendChild(q);
+  }
+  const line = document.createElement("p");
+  line.className = "exit-hook-line";
+  line.textContent = exitHook.line;
+  card.appendChild(line);
+  // The conception-mode hook already names the section itself.
+  if (!exitHook.line.includes(exitHook.section)) {
+    const sec = document.createElement("p");
+    sec.className = "exit-hook-section";
+    sec.textContent = `Cevabın ${exitHook.section} bölümünde, yalnızca senin için yazıldı.`;
+    card.appendChild(sec);
+  }
+  const cta = document.createElement("button");
+  cta.type = "button";
+  cta.className = "btn-gold-fill exit-hook-cta";
+  cta.textContent = "Devamı burada →";
+  card.appendChild(cta);
+
+  const remove = () => card.remove();
+  close.addEventListener("click", remove);
+  cta.addEventListener("click", () => {
+    api.trackEvent(id, "exit_hook_clicked");
+    ga4Event("exit_hook_clicked", { quoted_question: !!question });
+    remove();
+    reopen();
+  });
+
+  root.appendChild(card);
+  api.trackEvent(id, "exit_hook_seen");
+  ga4Event("exit_hook_shown", { quoted_question: !!question });
+  return remove;
+}
+
+function wireUnlockModal({
+  root,
+  id,
+  router,
+  disposables,
+  conceptionMode = false,
+  exitHook = null,
+}) {
   const modal = root.querySelector(".unlock-modal");
   const modalCta = root.querySelector(".unlock-modal-cta");
   const modalClose = root.querySelector(".unlock-modal-close");
@@ -1453,7 +1541,7 @@ function wireUnlockModal({ root, id, router, disposables, conceptionMode = false
   let openSource = null;
 
   // Open in a clean state — clear any error/loading from a prior attempt.
-  // `source`: 'devamini_oku' | 'unlock_card' | 'action_bar'.
+  // `source`: 'devamini_oku' | 'unlock_card' | 'action_bar' | 'exit_hook'.
   const openModal = (source) => {
     openSource = typeof source === "string" ? source : null;
     api.trackEvent(id, "opened_unlock", openSource);
@@ -1491,12 +1579,32 @@ function wireUnlockModal({ root, id, router, disposables, conceptionMode = false
     if (ev.target === modal) modal.close();
   });
 
+  // Exit hook: the modal closed and the reader did NOT head to Stripe
+  // (goingToCheckout) and the view isn't being torn down (disposed).
+  let goingToCheckout = false;
+  let disposed = false;
+  let removeHook = null;
+  let hookShownThisView = false; // backup for blocked localStorage
+  modal.addEventListener("close", () => {
+    if (goingToCheckout || disposed || hookShownThisView || !exitHook || !exitHook.line) return;
+    hookShownThisView = true;
+    removeHook = showExitHook({
+      root,
+      id,
+      exitHook,
+      reopen: () => openModal("exit_hook"),
+    }) || null;
+  });
+
   // CTA → actual unlock.
   modalCta.addEventListener("click", () => {
+    goingToCheckout = true;
     performUnlock(id, router, modalCta, modalError, PAYMENT_CTA_LABEL, openSource);
   });
 
   disposables.push(() => {
+    disposed = true;
+    if (removeHook) removeHook();
     if (modal.open) modal.close();
   });
 
@@ -2069,6 +2177,7 @@ export function renderResult(router, { id, paidRedirect, unlockedQuery }) {
           router,
           disposables,
           conceptionMode: data.conceptionMode === true,
+          exitHook: data.exitHook || null,
         });
         barPrimary.addEventListener("click", () => openUnlockModal("action_bar"));
       } else {

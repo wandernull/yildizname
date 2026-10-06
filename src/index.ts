@@ -22,7 +22,7 @@ import {
   setStripeFinancials,
   submitFeedback,
 } from "./lib/db";
-import { generateYildizname, LLM_MODEL } from "./lib/llm";
+import { generateYildizname, LLM_MODEL, safeHookLine } from "./lib/llm";
 import {
   CONCEPTION_HOOK,
   isConceptionQuestion,
@@ -294,6 +294,18 @@ app.get("/api/reading/:id", async (c) => {
     // Conception mode: the price modal states the reading won't predict
     // whether they'll have a child (honest before payment).
     conceptionMode: isConceptionQuestion(reading.formData.question),
+    // Price-modal exit hook (win-back step 2): the stored hook line,
+    // re-checked at read time (readings generated before a guard change
+    // still pass through the current guard), plus the answering section.
+    // The reader's own question is NOT sent — the client quotes it only
+    // from localStorage on the device that submitted the form.
+    exitHook:
+      !reading.unlocked && reading.hookLine && reading.questionTopic
+        ? {
+            line: safeHookLine(reading.hookLine, reading.questionTopic),
+            section: SECTION_TITLES[TOPIC_SECTION[reading.questionTopic]],
+          }
+        : null,
     karakterinOzuTeaser: reading.unlocked
       ? null
       : getKarakterinOzuTeaser(sections.karakterinOzu),
@@ -1258,6 +1270,7 @@ const UNLOCK_SOURCE_LABEL: Record<UnlockSource, string> = {
   devamini_oku: "Devamını oku",
   unlock_card: "Alt kart",
   action_bar: "Alt çubuk",
+  exit_hook: "Kanca kartı",
 };
 
 // "Saw the price" cell: ✓ ×N (opens) + first-open entry point.
@@ -1265,7 +1278,12 @@ function renderOpenedCell(r: Reading): string {
   if (!r.openedUnlock) return `<td class="flag">${DASH}</td>`;
   const times = r.openedUnlockCount > 1 ? ` ×${r.openedUnlockCount}` : "";
   const src = r.openedUnlockSource ? UNLOCK_SOURCE_LABEL[r.openedUnlockSource] : "";
-  return `<td class="flag" title="${esc(src)}">${CHECK}${times}${src ? `<br /><span class="src">${esc(src)}</span>` : ""}</td>`;
+  const hook = r.exitHookClicked
+    ? `<br /><span class="src" title="Kanca kartı gösterildi ve tıklandı">kanca ✓✓</span>`
+    : r.exitHookSeen
+      ? `<br /><span class="src" title="Kanca kartı gösterildi, tıklanmadı">kanca ✓</span>`
+      : "";
+  return `<td class="flag" title="${esc(src)}">${CHECK}${times}${src ? `<br /><span class="src">${esc(src)}</span>` : ""}${hook}</td>`;
 }
 
 // Price-intent funnel over readings created since unlock-intent tracking
@@ -1292,6 +1310,13 @@ function renderPriceFunnel(readings: Reading[]): string {
   const went = cohort.filter((r) => r.clickedUnlock);
   const paidC = cohort.filter((r) => r.unlocked);
   const sawNotPaid = saw.filter((r) => !r.unlocked);
+  // Exit hook (win-back step 2): shown after closing the price modal
+  // without going to Stripe → tapped "Devamı burada" → went to Stripe from
+  // the re-opened modal → paid.
+  const hookSeen = cohort.filter((r) => r.exitHookSeen);
+  const hookClicked = cohort.filter((r) => r.exitHookClicked);
+  const hookWent = cohort.filter((r) => r.clickedUnlockSource === "exit_hook");
+  const hookPaid = hookWent.filter((r) => r.unlocked);
   const rate = (a: number, b: number) => (b === 0 ? "—" : `%${Math.round((a / b) * 100)}`);
   const avgOpens =
     sawNotPaid.length === 0
@@ -1314,6 +1339,10 @@ function renderPriceFunnel(readings: Reading[]): string {
     <div class="ops-row"><span class="k">→ Ödemeye geçti</span><span class="v">${went.length} <span class="dim">(${rate(went.length, saw.length)} fiyatı görenlerin)</span></span></div>
     <div class="ops-row"><span class="k">→ Ödedi</span><span class="v">${paidC.length} <span class="dim">(${rate(paidC.length, went.length)} ödemeye geçenlerin)</span></span></div>
     <div class="ops-row"><span class="k">Fiyatı görüp ödemedi</span><span class="v"><strong>${sawNotPaid.length}</strong> <span class="dim">(ort. ${avgOpens} kez açtı)</span></span></div>
+    <div class="ops-row"><span class="k">Kanca kartı gösterildi</span><span class="v">${hookSeen.length} <span class="dim">(fiyatı görüp ödemeye geçmeden kapatanlar)</span></span></div>
+    <div class="ops-row"><span class="k">→ "Devamı burada" tıkladı</span><span class="v">${hookClicked.length} <span class="dim">(${rate(hookClicked.length, hookSeen.length)} kanca görenlerin)</span></span></div>
+    <div class="ops-row"><span class="k">→ Kancadan ödemeye geçti</span><span class="v">${hookWent.length} <span class="dim">(${rate(hookWent.length, hookClicked.length)} tıklayanların)</span></span></div>
+    <div class="ops-row"><span class="k">→ Kancadan ödedi</span><span class="v"><strong>${hookPaid.length}</strong> <span class="dim">(${rate(hookPaid.length, hookWent.length)} ödemeye geçenlerin)</span></span></div>
     <table class="ledger" style="margin-top:0.9rem">
       <thead><tr><th>Giriş noktası</th><th>İlk açılış</th><th>Ödemeye geçiş</th><th>Ödeme</th></tr></thead>
       <tbody>${srcRows}</tbody>
@@ -1331,6 +1360,8 @@ function renderFunnelBody(
   const listenedFree = readings.filter((r) => r.listenedFree).length;
   const listenedLocked = readings.filter((r) => r.listenedLocked).length;
   const openedUnlock = readings.filter((r) => r.openedUnlock).length;
+  const exitHookSeen = readings.filter((r) => r.exitHookSeen).length;
+  const exitHookClicked = readings.filter((r) => r.exitHookClicked).length;
   const clickedUnlock = readings.filter((r) => r.clickedUnlock).length;
   const paid = readings.filter((r) => r.unlocked).length;
   const pct = (n: number) => (total === 0 ? "—" : `${Math.round((n / total) * 100)}%`);
@@ -1369,6 +1400,7 @@ function renderFunnelBody(
     <div class="stat"><div class="stat-label">Karakteri dinledi</div><div class="stat-value">${esc(String(listenedFree))}<span class="stat-pct">${pct(listenedFree)}</span></div></div>
     <div class="stat"><div class="stat-label">Kilitli dinledi</div><div class="stat-value">${esc(String(listenedLocked))}<span class="stat-pct">${pct(listenedLocked)}</span></div></div>
     <div class="stat"><div class="stat-label">Fiyatı gördü</div><div class="stat-value">${esc(String(openedUnlock))}<span class="stat-pct">${pct(openedUnlock)}</span></div><div class="stat-sub">takip yeni başladı</div></div>
+    <div class="stat"><div class="stat-label">Kanca: gördü / tıkladı</div><div class="stat-value">${esc(String(exitHookSeen))}<span class="stat-pct">/ ${esc(String(exitHookClicked))}</span></div><div class="stat-sub">fiyat penceresi kapanınca</div></div>
     <div class="stat"><div class="stat-label">Ödemeye geçti</div><div class="stat-value">${esc(String(clickedUnlock))}<span class="stat-pct">${pct(clickedUnlock)}</span></div></div>
     <div class="stat"><div class="stat-label">Ödedi</div><div class="stat-value">${esc(String(paid))}<span class="stat-pct">${pct(paid)}</span></div></div>
   </div>
@@ -1831,6 +1863,13 @@ function renderOpsBody(
       reading.openedUnlock
         ? `${reading.openedUnlockCount} kez · ilk ${esc((reading.openedUnlockAt ?? "").replace("T", " ").slice(0, 16))}${reading.openedUnlockSource ? ` · ${esc(UNLOCK_SOURCE_LABEL[reading.openedUnlockSource])}` : ""}`
         : "—"
+    }</span></div>
+    <div class="ops-row"><span class="k">Kanca kartı</span><span class="v">${
+      reading.exitHookClicked
+        ? `gösterildi + tıklandı · ${esc((reading.exitHookClickedAt ?? "").replace("T", " ").slice(0, 16))}`
+        : reading.exitHookSeen
+          ? `gösterildi · ${esc((reading.exitHookSeenAt ?? "").replace("T", " ").slice(0, 16))}`
+          : "—"
     }</span></div>
     <div class="ops-row"><span class="k">Ödemeye geçti</span><span class="v">${
       reading.clickedUnlock

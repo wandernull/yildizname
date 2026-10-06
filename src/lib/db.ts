@@ -47,6 +47,10 @@ interface ReadingRow {
   opened_unlock_count: number;
   opened_unlock_source: string | null;
   clicked_unlock_source: string | null;
+  exit_hook_seen: number;
+  exit_hook_seen_at: string | null;
+  exit_hook_clicked: number;
+  exit_hook_clicked_at: string | null;
   question_topic: string | null;
   hook_line: string | null;
   safety_edits: string | null;
@@ -69,6 +73,7 @@ const READING_COLUMNS = `
   listened_chain, clicked_unlock, clicked_unlock_at,
   opened_unlock, opened_unlock_at, opened_unlock_count,
   opened_unlock_source, clicked_unlock_source,
+  exit_hook_seen, exit_hook_seen_at, exit_hook_clicked, exit_hook_clicked_at,
   question_topic, hook_line, safety_edits,
   feedback_rating, feedback_text, feedback_at,
   viewed_feedback_cta, clicked_feedback_cta
@@ -140,6 +145,10 @@ function rowToReading(row: ReadingRow): Reading {
     openedUnlockCount: row.opened_unlock_count ?? 0,
     openedUnlockSource: asUnlockSource(row.opened_unlock_source),
     clickedUnlockSource: asUnlockSource(row.clicked_unlock_source),
+    exitHookSeen: row.exit_hook_seen === 1,
+    exitHookSeenAt: row.exit_hook_seen_at,
+    exitHookClicked: row.exit_hook_clicked === 1,
+    exitHookClickedAt: row.exit_hook_clicked_at,
     questionTopic:
       row.question_topic != null &&
       (QUESTION_TOPICS as readonly string[]).includes(row.question_topic)
@@ -301,6 +310,20 @@ export async function markEvent(
       .run();
     return;
   }
+  if (event === "exit_hook_seen" || event === "exit_hook_clicked") {
+    // Idempotent flag + first-hit timestamp. Column names are a closed set.
+    const col = event;
+    await db
+      .prepare(
+        `UPDATE readings
+            SET ${col} = 1,
+                ${col}_at = COALESCE(${col}_at, ?)
+          WHERE id = ?`,
+      )
+      .bind(new Date().toISOString(), id)
+      .run();
+    return;
+  }
   if (event === "opened_unlock") {
     await db
       .prepare(
@@ -326,6 +349,8 @@ export async function markEvent(
     listened_chain: "listened_chain",
     clicked_unlock: "clicked_unlock",
     opened_unlock: "opened_unlock",
+    exit_hook_seen: "exit_hook_seen",
+    exit_hook_clicked: "exit_hook_clicked",
     viewed_feedback_cta: "viewed_feedback_cta",
     clicked_feedback_cta: "clicked_feedback_cta",
   };

@@ -77,7 +77,8 @@ export function ttsChunkUrl(readingId, section, chunkIdx) {
 // Valid events: 'scrolled_past_free', 'listened_free', 'listened_locked',
 // 'listened_chain', 'clicked_unlock', 'opened_unlock', 'viewed_feedback_cta',
 // 'clicked_feedback_cta'. `source` (optional) tags the unlock events with
-// the entry point: 'devamini_oku' | 'unlock_card' | 'action_bar'.
+// the entry point: 'devamini_oku' | 'unlock_card' | 'action_bar' | 'exit_hook'.
+// Also 'exit_hook_seen' / 'exit_hook_clicked' (price-modal exit hook).
 export function trackEvent(readingId, event, source) {
   if (!readingId) return Promise.resolve(null);
   return fetch(`/api/track/${encodeURIComponent(readingId)}`, {

@@ -223,6 +223,10 @@ const UNSAFE_STEMS = [
   // "…bu bağın sonunu gösterir") — hooks should invite, not warn
   "bilmezsen", "yapmazsan", "etmezsen", "görmezsen", "anlamazsan", "çözmezsen",
   "kaçırırsan", "kaçırırsın", "yarıda kal", "uğursuz", "sonunu", "sonu gel",
+  // parenthood promises — hooks are shown to unpaid readers from step 2 on
+  // ("…senin anneliğin bir sınav kadar bir hediye olacağını gördüm")
+  "anneliğin", "babalığın", "anne olaca", "baba olaca", "çocuğun ola",
+  "bebeğin ola", "evladın ola", "kucağına",
 ];
 const BENIGN_IDIOMS = ["kısır döngü"];
 const TR_LETTER = "a-zçğıöşüâîû";

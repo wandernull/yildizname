@@ -1566,6 +1566,67 @@ h4 {
   margin: 0;
 }
 
+/* Price-modal exit hook card (win-back step 2). Floats above the action
+   bar; shown once per reading per device after the price modal is closed
+   without going to Stripe. */
+.exit-hook {
+  position: fixed;
+  left: 50%;
+  bottom: calc(7.5rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 11;
+  width: min(420px, calc(100vw - 2rem));
+  padding: 1.1rem 1.2rem 1rem;
+  border: 1px solid rgba(201, 168, 76, 0.45);
+  border-radius: 12px;
+  background: rgba(10, 14, 26, 0.96);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55), 0 0 24px var(--glow);
+  text-align: center;
+  animation: exit-hook-in 0.45s ease-out;
+}
+@keyframes exit-hook-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.exit-hook-close {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.55rem;
+  background: none;
+  border: none;
+  color: var(--silver);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+.exit-hook-question {
+  margin: 0 1.2rem 0.6rem;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--silver);
+}
+.exit-hook-line {
+  margin: 0 0 0.6rem;
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  line-height: 1.45;
+  color: var(--gold-light);
+}
+.exit-hook-section {
+  margin: 0 0 0.9rem;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  color: var(--silver);
+}
+.exit-hook-cta {
+  width: 100%;
+}
+@media print {
+  .exit-hook { display: none !important; }
+}
+
 /* Conception-mode note in the price modal (before payment). */
 .unlock-modal-note {
   margin: -0.4rem 0 1rem;
