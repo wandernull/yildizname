@@ -239,7 +239,11 @@ async function requestFixes(
         tools: [FIX_TOOL],
         tool_choice: { type: "tool", name: FIX_TOOL.name },
       }),
-      signal: AbortSignal.timeout(90_000),
+      // 30s: every observed call finished in ≤19s. A hang falls through to
+      // the fail-safe path (drop flagged / child-body sentences), so a
+      // shorter cap never makes the reading less safe — it just keeps the
+      // queue job well inside the frontend's 360s poll window.
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

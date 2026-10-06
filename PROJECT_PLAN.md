@@ -166,7 +166,7 @@ Small, well-specified items intentionally pushed out of the current scope. Each 
 
 ## Open questions
 - **Known gaps after the 2026-10-06 ship (product owner chose to stop iterating; act only if real-world signal warrants):**
-  1. *Wait-time tail risk:* the safety call (90s timeout) runs after the ~2-3 min generation inside the queue consumer; the frontend loading poll gives up at 240s ("Yıldızlar fazla yavaş hizalanıyor"). Observed IVF test: 209s gen + 18s safety = 227s. Reading still completes (refresh / hazır email work). Fix options: safety timeout ~25s (fail-safe path already handles it) and/or raise the poll cap.
+  1. ~~*Wait-time tail risk*~~ — addressed 2026-10-06: frontend poll cap 240s → 360s (`pollReadingUntilTerminal`, MAX_ATTEMPTS 120) and safety-call timeout 90s → 30s (all observed calls ≤19s; a hang falls to the fail-safe path). Was: IVF test 209s gen + 18s safety = 227s vs the old 240s cap.
   2. *Conception mode scope:* reviews only preview + Sağlık + Çocuk ve Yuva; the fertility theme leaked into Nazar ("evlilik ve çocuk konusunda sana göz değiyor… bel ve göğüs tarafında diş izi") and Dönüm Noktaları ("2025-2026… ya açılacak ya kapanacak") in the Deniz IVF test (0c4f9620 local).
   3. *Conception review over-corrects:* it erased the IVF mention ("tüp bebek tedavisi" → "çetin bir yol") and the supportive "tedavine devam et" → "yoluna devam et"; one rewrite broke grammar ("bir nimetleri"). Could allow treatment as a neutral topic.
   4. *Missed timing words:* "annelik potansiyelin yüksek… Satürn bu işi geciktirir" survived (no `gecik`/`potansiyel` in the conception promise list).

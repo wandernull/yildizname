@@ -525,14 +525,16 @@ function startHarfler(host) {
 }
 
 // Poll /api/reading/:id every ~3s until status is terminal (done or
-// error) — or the soft cap is reached (~4 minutes, comfortably longer
-// than a normal generation). Returns the final reading payload, or
+// error) — or the soft cap is reached (~6 minutes). Raised from 4 min
+// on 2026-10-06: a long conception-mode generation took 209s on its own
+// (+18s safety review = 227s), uncomfortably close to the old 240s cap.
+// Normal readings still exit as soon as status flips to done. Returns the final reading payload, or
 // null if the poll loop was cancelled or timed out. `isCancelled` lets
 // the caller (e.g. renderLoading on view-cleanup) bail when the user
 // navigates away mid-poll.
 async function pollReadingUntilTerminal(id, isCancelled) {
   const INTERVAL_MS = 3000;
-  const MAX_ATTEMPTS = 80; // 80 × 3s = 240s
+  const MAX_ATTEMPTS = 120; // 120 × 3s = 360s
   for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
     if (isCancelled()) return null;
     const data = await api.fetchReading(id).catch(() => null);
@@ -713,7 +715,7 @@ function buildEscapeHatch(readingId, isCancelled, initialHasEmail) {
 //
 // Callbacks:
 //   onDone(data)   — terminal status='done'; data is the full reading
-//   onError(msg)   — terminal status='error', or poll timeout (~4 min)
+//   onError(msg)   — terminal status='error', or poll timeout (~6 min)
 function mountLoadingExperience(parentEl, opts) {
   const { readingId, isCancelled, hasEmail, onDone, onError } = opts;
   const tplNode = tpl("tpl-loading");
